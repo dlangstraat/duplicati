@@ -18,11 +18,15 @@ using System;
 using System.IO;
 using System.Linq;
 using System.Collections.Generic;
+using Duplicati.Library.Common.IO;
+using Duplicati.Library.Common;
 
 namespace Duplicati.CommandLine.RecoveryTool
 {
     public static class Restore
     {
+        private static readonly ISystemIO systemIO = SystemIO.IO_OS;
+
         public static int Run(List<string> args, Dictionary<string, string> options, Library.Utility.IFilter filter)
         {
             if (args.Count != 2 && args.Count != 3)
@@ -56,9 +60,6 @@ namespace Duplicati.CommandLine.RecoveryTool
                 return 100;
             }
 
-            Console.Write("Sorting index file ...");
-            Index.SortFile(ixfile, ixfile);
-            Console.WriteLine(" done!");
 
             string filelist;
             if (args.Count == 2)
@@ -86,7 +87,7 @@ namespace Duplicati.CommandLine.RecoveryTool
 
             if (blocksize <= 0)
             {
-                Console.WriteLine("Invalid blocksize: {0}, try setting --blocksize manually");
+                Console.WriteLine("Invalid blocksize: {0}, try setting --blocksize manually", blocksize);
                 return 100;
             }
 
@@ -103,140 +104,139 @@ namespace Duplicati.CommandLine.RecoveryTool
             using (var mru = new CompressedFileMRUCache(options))
             {
                 Console.WriteLine("Building lookup table for file hashes");
-                var lookup = new HashLookupHelper(ixfile, mru, (int)blocksize, blockhasher.HashSize / 8);
-
-                var filecount = 0L;
-                string largestprefix = null;
-                string[] largestprefixparts = null;
-
-                if (!string.IsNullOrWhiteSpace(targetpath))
-                    Console.WriteLine("Computing restore path");
-
-                foreach (var f in List.EnumerateFilesInDList(filelist, filter, options))
+                using (HashLookupHelper lookup = new HashLookupHelper(ixfile, mru, (int) blocksize, blockhasher.HashSize / 8))
                 {
-                    if (largestprefix == null)
-                    {
-                        largestprefix = f.Path;
-                        largestprefixparts = largestprefix.Split(new char[] { Path.DirectorySeparatorChar });
-                    }
-                    else if (largestprefix.Length > 1)
-                    {
-                        var parts = f.Path.Split(new char[] { Path.DirectorySeparatorChar });
+                    var filecount = 0L;
+                    string largestprefix = null;
+                    string[] largestprefixparts = null;
 
-                        var ni = 0;
-                        for (; ni < Math.Min(parts.Length, largestprefixparts.Length); ni++)
-                            if (!Library.Utility.Utility.ClientFilenameStringComparer.Equals(parts[ni], largestprefixparts[ni]))
-                                break;
+                    if (!string.IsNullOrWhiteSpace(targetpath))
+                        Console.WriteLine("Computing restore path");
 
-                        if (ni != largestprefixparts.Length)
+                    foreach (var f in List.EnumerateFilesInDList(filelist, filter, options))
+                    {
+                        if (largestprefix == null)
                         {
-                            if (ni == 0)
-                            {
-                                largestprefixparts = new string[0];
-                                largestprefix = string.Empty;
-                            }
-                            else
-                            {
-                                Array.Resize(ref largestprefixparts, ni - 1);
-                                largestprefix = string.Join(Path.DirectorySeparatorChar.ToString(), largestprefixparts);
-                            }
+                            largestprefix = f.Path;
+                            largestprefixparts = largestprefix.Split(new char[] { Path.DirectorySeparatorChar });
                         }
-                    }
-                    filecount++;
-                }
-
-                Console.WriteLine("Restoring {0} files to {1}", filecount, string.IsNullOrWhiteSpace(targetpath) ? "original position" : targetpath);
-
-                if (Library.Utility.Utility.IsClientLinux || largestprefix.Length > 0)
-                    largestprefix = Library.Utility.Utility.AppendDirSeparator(largestprefix);
-
-                if (!string.IsNullOrEmpty(largestprefix))
-                    Console.WriteLine("Removing common prefix {0} from files", largestprefix);
-
-                var i = 0L;
-                var errors = 0L;
-                foreach (var f in List.EnumerateFilesInDList(filelist, filter, options))
-                {
-                    try
-                    {
-                        var targetfile = MapToRestorePath(f.Path, largestprefix, targetpath);
-                        if (!Directory.Exists(Path.GetDirectoryName(targetfile)))
-                            Directory.CreateDirectory(Path.GetDirectoryName(targetfile));
-
-                        Console.Write("{0}: {1} ({2})", i, targetfile, Library.Utility.Utility.FormatSizeString(f.Size));
-
-                        using (var tf = new Library.Utility.TempFile())
+                        else if (largestprefix.Length > 1)
                         {
-                            using (var sw = File.OpenWrite(tf))
+                            var parts = f.Path.Split(new char[] { Path.DirectorySeparatorChar });
+
+                            var ni = 0;
+                            for (; ni < Math.Min(parts.Length, largestprefixparts.Length); ni++)
+                                if (!Library.Utility.Utility.ClientFilenameStringComparer.Equals(parts[ni], largestprefixparts[ni]))
+                                    break;
+
+                            if (ni != largestprefixparts.Length)
                             {
-                                if (f.BlocklistHashes == null)
+                                if (ni == 0)
                                 {
-                                    lookup.WriteHash(sw, f.Hash);
+                                    largestprefixparts = new string[0];
+                                    largestprefix = string.Empty;
                                 }
                                 else
                                 {
-                                    var blhi = 0L;
-                                    foreach (var blh in f.BlocklistHashes)
+                                    Array.Resize(ref largestprefixparts, ni - 1);
+                                    largestprefix = string.Join(Util.DirectorySeparatorString, largestprefixparts);
+                                }
+                            }
+                        }
+                        filecount++;
+                    }
+
+                    Console.WriteLine("Restoring {0} files to {1}", filecount, string.IsNullOrWhiteSpace(targetpath) ? "original position" : targetpath);
+
+                    if (Platform.IsClientPosix || largestprefix.Length > 0)
+                        largestprefix = Util.AppendDirSeparator(largestprefix);
+
+                    if (!string.IsNullOrEmpty(largestprefix))
+                        Console.WriteLine("Removing common prefix {0} from files", largestprefix);
+
+                    var i = 0L;
+                    foreach (var f in List.EnumerateFilesInDList(filelist, filter, options))
+                    {
+                        try
+                        {
+                            var targetfile = MapToRestorePath(f.Path, largestprefix, targetpath);
+                            if (!systemIO.DirectoryExists(systemIO.PathGetDirectoryName(targetfile)))
+                                systemIO.DirectoryCreate(systemIO.PathGetDirectoryName(targetfile));
+
+                            Console.Write("{0}: {1} ({2})", i, targetfile, Library.Utility.Utility.FormatSizeString(f.Size));
+
+                            using (var tf = new Library.Utility.TempFile())
+                            {
+                                using (var sw = File.OpenWrite(tf))
+                                {
+                                    if (f.BlocklistHashes == null)
                                     {
-                                        Console.Write(" {0}", blhi);
-                                        var blockhashoffset = blhi * hashesprblock * blocksize;
-
-                                        try
+                                        lookup.WriteHash(sw, f.Hash);
+                                    }
+                                    else
+                                    {
+                                        var blhi = 0L;
+                                        foreach (var blh in f.BlocklistHashes)
                                         {
-                                            var bi = 0;
-                                            foreach (var h in lookup.ReadBlocklistHashes(blh))
+                                            Console.Write(" {0}", blhi);
+                                            var blockhashoffset = blhi * hashesprblock * blocksize;
+
+                                            try
                                             {
-                                                try
+                                                var bi = 0;
+                                                foreach (var h in lookup.ReadBlocklistHashes(blh))
                                                 {
-                                                    sw.Position = blockhashoffset + (bi * blocksize);
-                                                    lookup.WriteHash(sw, h);
-                                                }
-                                                catch (Exception ex)
-                                                {
-                                                    Console.WriteLine("Failed to read hash: {0}{1}{2}", h, Environment.NewLine, ex);
-                                                }
+                                                    try
+                                                    {
+                                                        sw.Position = blockhashoffset + (bi * blocksize);
+                                                        lookup.WriteHash(sw, h);
+                                                    }
+                                                    catch (Exception ex)
+                                                    {
+                                                        Console.WriteLine("Failed to read hash: {0}{1}{2}", h, Environment.NewLine, ex);
+                                                    }
 
-                                                bi++;
+                                                    bi++;
+                                                }
                                             }
-                                        }
-                                        catch (Exception ex)
-                                        {
-                                            Console.WriteLine("Failed to read Blocklist hash: {0}{1}{2}", blh, Environment.NewLine, ex);
-                                        }
+                                            catch (Exception ex)
+                                            {
+                                                Console.WriteLine("Failed to read Blocklist hash: {0}{1}{2}", blh, Environment.NewLine, ex);
+                                            }
 
-                                        blhi++;
+                                            blhi++;
+                                        }
                                     }
                                 }
-                            }
 
-                            string fh;
-                            using (var fs = File.OpenRead(tf))
-                                fh = Convert.ToBase64String(filehasher.ComputeHash(fs));
+                                string fh;
+                                using (var fs = File.OpenRead(tf))
+                                    fh = Convert.ToBase64String(filehasher.ComputeHash(fs));
 
-                            if (fh == f.Hash)
-                            {
-                                Console.WriteLine(" done!");
-                                File.Copy(tf, targetfile, true);
-                            }
-                            else
-                            {
-                                Console.Write(" - Restored file hash mismatch");
-                                if (File.Exists(targetfile))
-                                    Console.WriteLine(" - not overwriting existing file: {0}", targetfile);
+                                if (fh == f.Hash)
+                                {
+                                    Console.WriteLine(" done!");
+                                    systemIO.FileCopy(tf, targetfile, true);
+                                }
                                 else
-                                    Console.WriteLine(" - restoring file in damaged condition");
+                                {
+                                    Console.Write(" - Restored file hash mismatch");
+                                    if (systemIO.FileExists(targetfile))
+                                        Console.WriteLine(" - not overwriting existing file: {0}", targetfile);
+                                    else
+                                        Console.WriteLine(" - restoring file in damaged condition");
 
 
+                                }
                             }
-                        }
 
+                        }
+                        catch (Exception ex)
+                        {
+                            Console.WriteLine(" error: {0}", ex);
+                        }
+                        i++;
                     }
-                    catch (Exception ex)
-                    {
-                        Console.WriteLine(" error: {0}", ex);
-                        errors++;
-                    }
-                    i++;
                 }
             }
 
@@ -256,10 +256,10 @@ namespace Duplicati.CommandLine.RecoveryTool
                 if (path.Substring(1, 1) == ":")
                     prefixpath = path.Substring(0, 1) + path.Substring(2);
 
-                return Path.Combine(restorepath, prefixpath);
+                return systemIO.PathCombine(restorepath, prefixpath);
             }
 
-            return Path.Combine(restorepath, path.Substring(prefixpath.Length));
+            return systemIO.PathCombine(restorepath, path.Substring(prefixpath.Length));
         }
 
 
@@ -268,14 +268,14 @@ namespace Duplicati.CommandLine.RecoveryTool
         {
             private const int LOOKUP_TABLE_SIZE = 2048;
 
-            private CompressedFileMRUCache m_cache;
-            private int m_hashsize;
-            private int m_blocksize;
+            private readonly CompressedFileMRUCache m_cache;
+            private readonly int m_hashsize;
+            private readonly int m_blocksize;
             private Stream m_indexfile;
-            private List<string> m_lookup = new List<string>();
-            private List<long> m_offsets = new List<long>();
-            private byte[] m_linebuf = new byte[128];
-            private byte[] m_newline = Environment.NewLine.Select(x => (byte)x).ToArray();
+            private readonly List<string> m_lookup = new List<string>();
+            private readonly List<long> m_offsets = new List<long>();
+            private readonly byte[] m_linebuf = new byte[128];
+            private readonly byte[] m_newline = Environment.NewLine.Select(x => (byte)x).ToArray();
 
             public HashLookupHelper(string indexfile, CompressedFileMRUCache cache, int blocksize, int hashsize)
             {
@@ -398,7 +398,7 @@ namespace Duplicati.CommandLine.RecoveryTool
                         using (var fs = m_cache.ReadBlock(v.Value, hash))
                         {
                             var buf = new byte[m_blocksize];
-                            var l = fs.Read(buf, 0, buf.Length);
+                            var l = Duplicati.Library.Utility.Utility.ForceStreamRead(fs, buf, buf.Length);
                             Array.Resize(ref buf, l);
 
                             return buf;
@@ -432,7 +432,7 @@ namespace Duplicati.CommandLine.RecoveryTool
             private Dictionary<string, Library.Interface.ICompression> m_lookup = new Dictionary<string, Duplicati.Library.Interface.ICompression>();
             private Dictionary<string, Stream> m_streams = new Dictionary<string, Stream>();
             private List<string> m_mru = new List<string>();
-            private Dictionary<string, string> m_options;
+            private readonly Dictionary<string, string> m_options;
 
             private const int MAX_OPEN_ARCHIVES = 20;
 

@@ -175,8 +175,8 @@ Usage: compare <storage-URL> [<base-version>] [<compare-to>] [<options>]
 
   Compares two backups and shows differences. If no versions are given, changes are shown between the two latest backups. The versions can either be timestamps or backup version numbers. If only one version is given, the most recent backup is compared to that version.
 
-  --verbose
-    Shows names of files
+  --full-result
+    Shows all changes
   --include=<filter>
     Adds an include filter (for verbose output)
   --exclude=<filter>
@@ -292,8 +292,10 @@ Duplicati provides information for debugging and logging purposes. By default, a
     If something needs to be retried (e.g. upload failed) this will cause an entry in the log file.
   --log-file = <path>
     The path to the log file e.g. "D:\duplicati\log.txt".
-  --log-level = Profiling | Information | Warning | Error 
-    Specifies the log level.
+  --log-file-log-level = Profiling | Verbose | Information | Warning | Error 
+    Specifies the log level to use for the log file.
+  --console-log-level = Profiling | Verbose | Information | Warning | Error 
+    Specifies the log level to use for the console log.
 
     
 # =============================================================================

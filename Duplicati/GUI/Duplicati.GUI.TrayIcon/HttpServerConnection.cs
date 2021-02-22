@@ -1,10 +1,12 @@
-﻿﻿using System;
+﻿using System;
 using System.Collections.Generic;
 using System.Linq;
 using System.Net;
 using System.Text;
+using Duplicati.Library.Common.IO;
 using Duplicati.Server.Serialization;
 using Duplicati.Server.Serialization.Interface;
+using Newtonsoft.Json;
 
 namespace Duplicati.GUI.TrayIcon
 {
@@ -22,13 +24,9 @@ namespace Duplicati.GUI.TrayIcon
 
         private class BackgroundRequest
         {
-            public string Method;
-            public string Endpoint;
-            public Dictionary<string, string> Query;
-
-            public BackgroundRequest() 
-            {
-            }
+            public readonly string Method;
+            public readonly string Endpoint;
+            public readonly Dictionary<string, string> Query;
 
             public BackgroundRequest(string method, string endpoint, Dictionary<string, string> query)
             {
@@ -38,10 +36,10 @@ namespace Duplicati.GUI.TrayIcon
             }
         }
 
-        private string m_apiUri;
-        private string m_baseUri;
+        private readonly string m_apiUri;
+        private readonly string m_baseUri;
         private string m_password;
-        private bool m_saltedpassword;
+        private readonly bool m_saltedpassword;
         private string m_authtoken;
         private string m_xsrftoken;
         private static readonly System.Text.Encoding ENCODING = System.Text.Encoding.GetEncoding("utf-8");
@@ -54,12 +52,15 @@ namespace Duplicati.GUI.TrayIcon
         public delegate void NewNotificationDelegate(INotification notification);
         public event NewNotificationDelegate OnNotification;
 
+        private long m_lastDataUpdateId = -1;
+        private bool m_disableTrayIconLogin;
+
         private volatile IServerStatus m_status;
 
         private volatile bool m_shutdown = false;
         private volatile System.Threading.Thread m_requestThread;
         private volatile System.Threading.Thread m_pollThread;
-        private System.Threading.AutoResetEvent m_waitLock;
+        private readonly System.Threading.AutoResetEvent m_waitLock;
 
         private readonly Dictionary<string, string> m_updateRequest;
         private readonly Dictionary<string, string> m_options;
@@ -69,15 +70,15 @@ namespace Duplicati.GUI.TrayIcon
         public IServerStatus Status { get { return m_status; } }
 
         private readonly object m_lock = new object();
-        private Queue<BackgroundRequest> m_workQueue = new Queue<BackgroundRequest>();
+        private readonly Queue<BackgroundRequest> m_workQueue = new Queue<BackgroundRequest>();
 
-        public HttpServerConnection(Uri server, string password, bool saltedpassword, Program.PasswordSource passwordSource, Dictionary<string, string> options)
+        public HttpServerConnection(Uri server, string password, bool saltedpassword, Program.PasswordSource passwordSource, bool disableTrayIconLogin, Dictionary<string, string> options)
         {
-            m_baseUri = server.ToString();
-            if (!m_baseUri.EndsWith("/", StringComparison.Ordinal))
-                m_baseUri += "/";
+            m_baseUri = Util.AppendDirSeparator(server.ToString(), "/");
 
             m_apiUri = m_baseUri + "api/v1";
+
+            m_disableTrayIconLogin = disableTrayIconLogin;
 
             m_firstNotificationTime = DateTime.Now;
 
@@ -121,6 +122,12 @@ namespace Duplicati.GUI.TrayIcon
                 m_lastNotificationId = m_status.LastNotificationUpdateID;
                 UpdateNotifications();
             }
+
+            if (m_lastDataUpdateId != m_status.LastDataUpdateID)
+            {
+                m_lastDataUpdateId = m_status.LastDataUpdateID;
+                UpdateApplicationSettings();
+            }
         }
 
         private void UpdateNotifications()
@@ -136,6 +143,14 @@ namespace Duplicati.GUI.TrayIcon
                 if (notifications.Any())
                     m_firstNotificationTime = notifications.Select(x => x.Timestamp).Max();
             }
+        }
+
+        private void UpdateApplicationSettings()
+        {
+            var req = new Dictionary<string, string>();
+            var settings = PerformRequest<Dictionary<string, string>>("GET", "/serversettings", req);
+            if (settings != null && settings.TryGetValue("disable-tray-icon-login", out var str))
+                m_disableTrayIconLogin = Library.Utility.Utility.ParseBool(str, false);
         }
 
         private void LongPollRunner()
@@ -212,8 +227,13 @@ namespace Duplicati.GUI.TrayIcon
 
         private class SaltAndNonce
         {
-            public string Salt = null;
-            public string Nonce = null;
+            // The JsonProperty attribute allows the Serializer.Deserialize method to
+            // set these readonly fields.
+            [JsonProperty]
+            public readonly string Salt = null;
+
+            [JsonProperty]
+            public readonly string Nonce = null;
         }
 
         private SaltAndNonce GetSaltAndNonce()
@@ -369,15 +389,16 @@ namespace Duplicati.GUI.TrayIcon
                         switch (m_passwordSource)
                         {
                             case Program.PasswordSource.Database:
-                                Program.databaseConnection.ApplicationSettings.ReloadSettings();
+                                if (Program.databaseConnection != null)
+                                    Program.databaseConnection.ApplicationSettings.ReloadSettings();
                                 
-                                if (Program.databaseConnection.ApplicationSettings.WebserverPasswordTrayIcon != m_password)
+                                if (Program.databaseConnection != null && Program.databaseConnection.ApplicationSettings.WebserverPasswordTrayIcon != m_password)
                                     m_password = Program.databaseConnection.ApplicationSettings.WebserverPasswordTrayIcon;
                                 else
                                     hasTriedPassword = true;
                                 break;
                             case Program.PasswordSource.HostedServer:
-                                if (Server.Program.DataConnection.ApplicationSettings.WebserverPassword != m_password)
+                                if (Server.Program.DataConnection != null && Server.Program.DataConnection.ApplicationSettings.WebserverPassword != m_password)
                                     m_password = Server.Program.DataConnection.ApplicationSettings.WebserverPassword;
                                 else
                                     hasTriedPassword = true;
@@ -513,7 +534,7 @@ namespace Duplicati.GUI.TrayIcon
             get 
             { 
                 if (m_authtoken != null)
-                    return m_baseUri + STATUS_WINDOW + "?auth-token=" + GetAuthToken();
+                    return m_baseUri + STATUS_WINDOW + (m_disableTrayIconLogin ? string.Empty : "?auth-token=" + GetAuthToken());
                 
                 return m_baseUri + STATUS_WINDOW; 
             }

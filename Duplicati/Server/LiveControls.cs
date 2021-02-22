@@ -1,4 +1,4 @@
-#region Disclaimer / License
+﻿#region Disclaimer / License
 // Copyright (C) 2015, The Duplicati Team
 // http://www.duplicati.com, info@duplicati.com
 // 
@@ -20,6 +20,7 @@
 using System;
 using System.Collections.Generic;
 using System.Text;
+using Duplicati.Library.Common;
 
 namespace Duplicati.Server
 {
@@ -158,7 +159,7 @@ namespace Duplicati.Server
         /// <summary>
         /// The timer that is activated after a pause period.
         /// </summary>
-        private System.Threading.Timer m_waitTimer;
+        private readonly System.Threading.Timer m_waitTimer;
 
         /// <summary>
         /// The time that the current pause is expected to expire
@@ -210,7 +211,7 @@ namespace Duplicati.Server
 
             try
             {
-                if (!Library.Utility.Utility.IsClientLinux)
+                if (!Platform.IsClientPosix)
                     RegisterHibernateMonitor();
             }
             catch { }
@@ -338,14 +339,6 @@ namespace Duplicati.Server
         private void RegisterHibernateMonitor()
         {
             Microsoft.Win32.SystemEvents.PowerModeChanged += new Microsoft.Win32.PowerModeChangedEventHandler(SystemEvents_PowerModeChanged);
-        }
-
-        /// <summary>
-        /// Method for calling a Win32 API
-        /// </summary>
-        private void UnregisterHibernateMonitor()
-        {
-            Microsoft.Win32.SystemEvents.PowerModeChanged -= new Microsoft.Win32.PowerModeChangedEventHandler(SystemEvents_PowerModeChanged);
         }
 
         /// <summary>

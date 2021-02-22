@@ -29,9 +29,9 @@ namespace Duplicati.Library.Main.Operation
         /// </summary>
         private static readonly string LOGTAG = Logging.Log.LogTagFromType(typeof(ListChangesHandler));
 
-        private string m_backendurl;
-        private Options m_options;
-        private ListChangesResults m_result;
+        private readonly string m_backendurl;
+        private readonly Options m_options;
+        private readonly ListChangesResults m_result;
 
         public ListChangesHandler(string backend, Options options, ListChangesResults result)
         {
@@ -67,12 +67,12 @@ namespace Duplicati.Library.Main.Operation
             var useLocalDb = !m_options.NoLocalDb && System.IO.File.Exists(m_options.Dbpath);
             baseVersion = string.IsNullOrEmpty(baseVersion) ? "1" : baseVersion;
             compareVersion = string.IsNullOrEmpty(compareVersion) ? "0" : compareVersion;
-            
-            long baseVersionIndex = -1;
-            long compareVersionIndex = -1;
-            
-            DateTime baseVersionTime = new DateTime(0);
-            DateTime compareVersionTime = new DateTime(0);
+
+            long baseVersionIndex;
+            long compareVersionIndex;
+
+            DateTime baseVersionTime;
+            DateTime compareVersionTime;
             
             using(var tmpdb = useLocalDb ? null : new Library.Utility.TempFile())
             using(var db = new Database.LocalListChangesDatabase(useLocalDb ? m_options.Dbpath : (string)tmpdb))

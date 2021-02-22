@@ -16,7 +16,7 @@ namespace Duplicati.WindowsService
         public const string DISPLAY_NAME = "Duplicati service";
         public const string DESCRIPTION = "Runs Duplicati as a service";
 
-        private System.Diagnostics.EventLog m_eventLog;
+        private readonly System.Diagnostics.EventLog m_eventLog;
 
         private readonly object m_lock = new object();
         private Runner m_runner = null;
@@ -145,12 +145,12 @@ namespace Duplicati.WindowsService
         [StructLayout(LayoutKind.Sequential)]
         private struct ServiceStatus
         {
-            public uint dwServiceType;
+            public readonly uint dwServiceType;
             public ServiceState dwCurrentState;
-            public uint dwControlsAccepted;
-            public uint dwWin32ExitCode;
-            public uint dwServiceSpecificExitCode;
-            public uint dwCheckPoint;
+            public readonly uint dwControlsAccepted;
+            public readonly uint dwWin32ExitCode;
+            public readonly uint dwServiceSpecificExitCode;
+            public readonly uint dwCheckPoint;
             public uint dwWaitHint;
         };
 

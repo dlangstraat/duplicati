@@ -37,7 +37,7 @@ namespace Duplicati.Library.Utility
         /// <summary>
         /// The wait event
         /// </summary>
-        private AutoResetEvent m_event;
+        private readonly AutoResetEvent m_event;
         /// <summary>
         /// The internal list of tasks to perform
         /// </summary>
@@ -63,7 +63,7 @@ namespace Duplicati.Library.Utility
         /// <summary>
         /// A callback that performs the actual work on the item
         /// </summary>
-        private Action<Tx> m_delegate;
+        private readonly Action<Tx> m_delegate;
 
         /// <summary>
         /// An event that is raised when the runner state changes
@@ -83,7 +83,7 @@ namespace Duplicati.Library.Utility
         /// </summary>
         public event Action<WorkerThread<Tx>, Tx, Exception> OnError;
         /// <summary>
-        /// An evnet that occurs when a new task is added to the queue or an existing one is removed
+        /// An event that occurs when a new task is added to the queue or an existing one is removed
         /// </summary>
         public event Action<WorkerThread<Tx>> WorkQueueChanged;
 
@@ -283,23 +283,25 @@ namespace Duplicati.Library.Utility
                         m_currentTask = m_tasks.Dequeue();
 
                 if (m_currentTask == null && !m_terminate)
-                if (m_state == WorkerThread<Tx>.RunState.Run)
-                    m_event.WaitOne(); //Sleep until signaled
-                    else
                 {
-                    if (WorkerStateChanged != null)
-                        WorkerStateChanged(this, m_state);
-
-                    //Sleep for brief periods, until signaled
-                    while (!m_terminate && m_state != WorkerThread<Tx>.RunState.Run)
-                        m_event.WaitOne(1000 * 60 * 5, false);
-
-                    //If we were not terminated, we are now ready to run
-                    if (!m_terminate)
+                    if (m_state == WorkerThread<Tx>.RunState.Run)
+                        m_event.WaitOne(); //Sleep until signaled
+                    else
                     {
-                        m_state = WorkerThread<Tx>.RunState.Run;
                         if (WorkerStateChanged != null)
                             WorkerStateChanged(this, m_state);
+
+                        //Sleep for brief periods, until signaled
+                        while (!m_terminate && m_state != WorkerThread<Tx>.RunState.Run)
+                            m_event.WaitOne(1000 * 60 * 5, false);
+
+                        //If we were not terminated, we are now ready to run
+                        if (!m_terminate)
+                        {
+                            m_state = WorkerThread<Tx>.RunState.Run;
+                            if (WorkerStateChanged != null)
+                                WorkerStateChanged(this, m_state);
+                        }
                     }
                 }
 

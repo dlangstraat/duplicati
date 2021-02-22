@@ -18,17 +18,18 @@
 // 
 #endregion
 
+using Duplicati.Library.Common.IO;
+using Duplicati.Library.Interface;
+using Duplicati.Library.Utility;
+using Microsoft.SharePoint.Client; // Plain 'using' for extension methods
 using System;
 using System.Collections.Generic;
 using System.IO;
 using System.Linq;
 using System.Text;
-using Duplicati.Library.Utility;
-
-using Duplicati.Library.Interface;
-
+using System.Threading;
+using System.Threading.Tasks;
 using SP = Microsoft.SharePoint.Client;
-using Microsoft.SharePoint.Client; // Plain 'using' for extension methods
 
 namespace Duplicati.Library.Backend
 {
@@ -54,15 +55,15 @@ namespace Duplicati.Library.Backend
         #region [Variables and constants declarations]
 
         /// <summary> Auth-stripped HTTPS-URI as passed to constructor. </summary>
-        private Utility.Uri m_orgUrl;
+        private readonly Utility.Uri m_orgUrl;
         /// <summary> Server relative path to backup folder. </summary>
-        private string m_serverRelPath;
+        private readonly string m_serverRelPath;
         /// <summary> User's credentials to create client context </summary>
         private System.Net.ICredentials m_userInfo;
         /// <summary> Flag indicating to move files to recycler on deletion. </summary>
-        private bool m_deleteToRecycler = false;
+        private readonly bool m_deleteToRecycler = false;
         /// <summary> Flag indicating to use UploadBinaryDirect. </summary>
-        private bool m_useBinaryDirectMode = false;
+        private readonly bool m_useBinaryDirectMode = false;
 
         /// <summary> URL to SharePoint web. Will be determined from m_orgUri on first use. </summary>
         private string m_spWebUrl;
@@ -70,10 +71,10 @@ namespace Duplicati.Library.Backend
         private SP.ClientContext m_spContext;
 
         /// <summary> The chunk size for uploading files. </summary>
-        private int m_fileChunkSize = 4 << 20; // Default: 4MB
+        private readonly int m_fileChunkSize = 4 << 20; // Default: 4MB
 
         /// <summary> The chunk size for uploading files. </summary>
-        private int m_useContextTimeoutMs = -1; // default: do not touch original setting
+        private readonly int m_useContextTimeoutMs = -1; // default: do not touch original setting
 
         #endregion
 
@@ -92,11 +93,6 @@ namespace Duplicati.Library.Backend
         public virtual string Description
         {
             get { return Strings.SharePoint.Description; }
-        }
-
-        public virtual bool SupportsStreaming
-        {
-            get { return true; }
         }
 
         public virtual IList<ICommandLineArgument> SupportedCommands
@@ -169,8 +165,7 @@ namespace Duplicati.Library.Backend
             m_serverRelPath = u.Path;
             if (!m_serverRelPath.StartsWith("/", StringComparison.Ordinal))
                 m_serverRelPath = "/" + m_serverRelPath;
-            if (!m_serverRelPath.EndsWith("/", StringComparison.Ordinal))
-                m_serverRelPath += "/";
+            m_serverRelPath = Util.AppendDirSeparator(m_serverRelPath, "/");
             // remove marker for SP-Web
             m_serverRelPath = m_serverRelPath.Replace("//", "/");
 
@@ -287,7 +282,7 @@ namespace Duplicati.Library.Backend
         /// slash to separate web.
         /// Otherwise it's a good guess to look for "/documents", as we expect
         /// that the default document library is used in the path.
-        /// If that won't help, we will try all possible pathes from longest
+        /// If that won't help, we will try all possible paths from longest
         /// to shortest...
         /// </summary>
         private static string findCorrectWebPath(Utility.Uri orgUrl, System.Net.ICredentials userInfo, out SP.ClientContext retCtx)
@@ -431,7 +426,7 @@ namespace Duplicati.Library.Backend
             {
                 var req = m_parent.CreateWebRequestExecutor(context, requestUrl);
                 if (string.IsNullOrWhiteSpace(req.WebRequest.UserAgent))
-                    req.WebRequest.UserAgent = "Duplicati OD4B v" + System.Reflection.Assembly.GetExecutingAssembly().GetName().Version.ToString();
+                    req.WebRequest.UserAgent = "Duplicati OD4B v" + System.Reflection.Assembly.GetExecutingAssembly().GetName().Version;
                 return req;
             }
         }
@@ -516,25 +511,21 @@ namespace Duplicati.Library.Backend
             catch (Interface.FileMissingException) { throw; }
             catch (Interface.FolderMissingException) { throw; }
             catch { if (!useNewContext) /* retry */ doGet(remotename, stream, true); else throw; }
-            finally { }
-            try
-            {
-                byte[] copybuffer = new byte[Duplicati.Library.Utility.Utility.DEFAULT_BUFFER_SIZE];
-                using (var fileInfo = SP.File.OpenBinaryDirect(ctx, fileurl))
-                using (var s = fileInfo.Stream)
-                    Utility.Utility.CopyStream(s, stream, true, copybuffer);
-            }
-            finally { }
+
+            byte[] copybuffer = new byte[Duplicati.Library.Utility.Utility.DEFAULT_BUFFER_SIZE];
+            using (var fileInfo = SP.File.OpenBinaryDirect(ctx, fileurl))
+            using (var s = fileInfo.Stream)
+                Utility.Utility.CopyStream(s, stream, true, copybuffer);
         }
 
-        public void Put(string remotename, string filename)
+        public Task PutAsync(string remotename, string filename, CancellationToken cancelToken)
         {
-            using (System.IO.FileStream fs = System.IO.File.OpenRead(filename))
-                Put(remotename, fs);
+            using (FileStream fs = System.IO.File.OpenRead(filename))
+                return PutAsync(remotename, fs, cancelToken);
         }
 
-        public void Put(string remotename, System.IO.Stream stream) { doPut(remotename, stream, false); }
-        private void doPut(string remotename, System.IO.Stream stream, bool useNewContext)
+        public Task PutAsync(string remotename, Stream stream, CancellationToken cancelToken) { return doPut(remotename, stream, false, cancelToken); }
+        private async Task doPut(string remotename, Stream stream, bool useNewContext, CancellationToken cancelToken)
         {
             string fileurl = m_serverRelPath + System.Web.HttpUtility.UrlPathEncode(remotename);
             SP.ClientContext ctx = getSpClientContext(useNewContext);
@@ -548,27 +539,24 @@ namespace Duplicati.Library.Backend
                 
                 useNewContext = true; // disable retry
                 if (!m_useBinaryDirectMode)
-                    uploadFileSlicePerSlice(ctx, remoteFolder, stream, fileurl);
+                    await uploadFileSlicePerSlice(ctx, remoteFolder, stream, fileurl, cancelToken).ConfigureAwait(false);
             }
             catch (ServerException) { throw; /* rethrow if Server answered */ }
             catch (Interface.FileMissingException) { throw; }
             catch (Interface.FolderMissingException) { throw; }
-            catch { if (!useNewContext) /* retry */ { doPut(remotename, stream, true); return; } else throw; }
-            finally { }
+            catch { if (!useNewContext) /* retry */ { await doPut(remotename, stream, true, cancelToken).ConfigureAwait(false); } else throw; }
 
             if (m_useBinaryDirectMode)
             {
-                try { SP.File.SaveBinaryDirect(ctx, fileurl, stream, true); }
-                finally { }
+                SP.File.SaveBinaryDirect(ctx, fileurl, stream, true);
             }
-
         }
 
         /// <summary>
         /// Upload in chunks to bypass filesize limit.
         /// https://msdn.microsoft.com/en-us/library/office/dn904536.aspx
         /// </summary>
-        private SP.File uploadFileSlicePerSlice(ClientContext ctx, Folder folder, Stream sourceFileStream, string fileName)
+        private async Task<SP.File> uploadFileSlicePerSlice(ClientContext ctx, Folder folder, Stream sourceFileStream, string fileName, CancellationToken cancelToken)
         {
             // Each sliced upload requires a unique ID.
             Guid uploadId = Guid.NewGuid();
@@ -592,7 +580,7 @@ namespace Duplicati.Library.Backend
             {
                 int bufCnt = 0;
                 // read chunk to array (necessary because chunk uploads fail if size unknown)
-                while (bufCnt < blockSize && (lastreadsize = sourceFileStream.Read(buf, bufCnt, blockSize - bufCnt)) > 0)
+                while (bufCnt < blockSize && (lastreadsize = await sourceFileStream.ReadAsync(buf, bufCnt, blockSize - bufCnt, cancelToken).ConfigureAwait(false)) > 0)
                     bufCnt += lastreadsize;
 
                 using (var contentChunk = new MemoryStream(buf, 0, bufCnt, false))
@@ -696,7 +684,6 @@ namespace Duplicati.Library.Backend
             catch (Interface.FileMissingException) { throw; }
             catch (Interface.FolderMissingException) { throw; }
             catch { if (!useNewContext) /* retry */ doCreateFolder(true); else throw; }
-            finally { }
         }
 
         public void Delete(string remotename) { doDelete(remotename, false); }
@@ -722,7 +709,6 @@ namespace Duplicati.Library.Backend
             catch (Interface.FileMissingException) { throw; }
             catch (Interface.FolderMissingException) { throw; }
             catch { if (!useNewContext) /* retry */ doDelete(remotename, true); else throw; }
-            finally { }
         }
 
         #endregion

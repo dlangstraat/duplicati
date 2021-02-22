@@ -18,14 +18,15 @@
 using System;
 using System.Linq;
 using System.Collections.Generic;
+using Duplicati.Library.Main.Database;
 
 namespace Duplicati.Library.Main.Operation
 {
     internal class ListControlFilesHandler
     {
-        private Options m_options;
-        private string m_backendurl;
-        private ListResults m_result;
+        private readonly Options m_options;
+        private readonly string m_backendurl;
+        private readonly ListResults m_result;
         
         public ListControlFilesHandler(string backendurl, Options options, ListResults result)
         {
@@ -68,7 +69,7 @@ namespace Duplicati.Library.Main.Operation
                                     if (Library.Utility.FilterExpression.Matches(filter, cf.Key))
                                         files.Add(new ListResultFile(cf.Key, null));
                             
-                            m_result.SetResult(new Library.Interface.IListResultFileset[] { new ListResultFileset(fileversion.Key, fileversion.Value.Time, -1, -1) }, files);
+                            m_result.SetResult(new Library.Interface.IListResultFileset[] { new ListResultFileset(fileversion.Key, BackupType.PARTIAL_BACKUP, fileversion.Value.Time, -1, -1) }, files);
                             lastEx = null;
                             break;
                         }

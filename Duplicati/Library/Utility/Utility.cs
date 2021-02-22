@@ -1,4 +1,4 @@
-// Copyright (C) 2015, The Duplicati Team
+﻿// Copyright (C) 2015, The Duplicati Team
 // http://www.duplicati.com, info@duplicati.com
 // 
 // This library is free software; you can redistribute it and/or
@@ -21,6 +21,10 @@ using System.Linq;
 using System.Threading.Tasks;
 using System.Text;
 using System.Text.RegularExpressions;
+using Duplicati.Library.Common.IO;
+using Duplicati.Library.Common;
+using System.Globalization;
+using System.Threading;
 
 namespace Duplicati.Library.Utility
 {
@@ -65,9 +69,9 @@ namespace Duplicati.Library.Utility
         /// </summary>
         /// <param name="source">The stream to read from</param>
         /// <param name="target">The stream to write to</param>
-        public static void CopyStream(Stream source, Stream target)
+        public static long CopyStream(Stream source, Stream target)
         {
-            CopyStream(source, target, true);
+            return CopyStream(source, target, true);
         }
 
         /// <summary>
@@ -77,7 +81,7 @@ namespace Duplicati.Library.Utility
         /// <param name="target">The stream to write to</param>
         /// <param name="tryRewindSource">True if an attempt should be made to rewind the source stream, false otherwise</param>
         /// <param name="buf">Temporary buffer to use (optional)</param>
-        public static void CopyStream(Stream source, Stream target, bool tryRewindSource, byte[] buf = null)
+        public static long CopyStream(Stream source, Stream target, bool tryRewindSource, byte[] buf = null)
         {
             if (tryRewindSource && source.CanSeek)
                 try { source.Position = 0; }
@@ -89,8 +93,54 @@ namespace Duplicati.Library.Utility
             buf = buf ?? new byte[DEFAULT_BUFFER_SIZE];
 
             int read;
-            while ((read = source.Read(buf, 0, buf.Length)) != 0)
-                target.Write(buf, 0, read);
+			long total = 0;
+			while ((read = source.Read(buf, 0, buf.Length)) != 0)
+			{
+				target.Write(buf, 0, read);
+				total += read;
+			}
+
+			return total;
+        }
+
+        /// <summary>
+        /// Copies the content of one stream into another
+        /// </summary>
+        /// <param name="source">The stream to read from</param>
+        /// <param name="target">The stream to write to</param>
+        /// <param name="cancelToken">Token to cancel the operation.</param>
+        public static async Task<long> CopyStreamAsync(Stream source, Stream target, CancellationToken cancelToken)
+        {
+            return await CopyStreamAsync(source, target, tryRewindSource: true, cancelToken: cancelToken).ConfigureAwait(false);
+        }
+
+        /// <summary>
+        /// Copies the content of one stream into another
+        /// </summary>
+        /// <param name="source">The stream to read from</param>
+        /// <param name="target">The stream to write to</param>
+        /// <param name="tryRewindSource">True if an attempt should be made to rewind the source stream, false otherwise</param>
+        /// <param name="cancelToken">Token to cancel the operation.</param>
+        /// <param name="buf">Temporary buffer to use (optional)</param>
+        public static async Task<long> CopyStreamAsync(Stream source, Stream target, bool tryRewindSource, CancellationToken cancelToken, byte[] buf = null)
+        {
+            if (tryRewindSource && source.CanSeek)
+                try { source.Position = 0; }
+                catch {}
+
+            buf = buf ?? new byte[DEFAULT_BUFFER_SIZE];
+
+            int read;
+            long total = 0;
+            while (true)
+            {
+                read = await source.ReadAsync(buf, 0, buf.Length, cancelToken).ConfigureAwait(false);
+                if (read == 0) break;
+                await target.WriteAsync(buf, 0, read, cancelToken).ConfigureAwait(false);
+                total += read;
+            }
+
+            return total;
         }
 
         /// <summary>
@@ -115,6 +165,15 @@ namespace Duplicati.Library.Utility
         }
 
         /// <summary>
+        /// Convert literal path to the equivalent regular expression.
+        /// </summary>
+        public static string ConvertLiteralToRegExp(string literalPath)
+        {
+            // Escape all special characters
+            return Regex.Escape(literalPath);
+        }
+
+        /// <summary>
         /// Returns a list of all files found in the given folder.
         /// The search is recursive.
         /// </summary>
@@ -122,7 +181,7 @@ namespace Duplicati.Library.Utility
         /// <returns>A list of the full filenames</returns>
         public static IEnumerable<string> EnumerateFiles(string basepath)
         {
-            return EnumerateFiles(basepath, null);
+            return EnumerateFileSystemEntries(basepath).Where(x => !x.EndsWith(Util.DirectorySeparatorString, StringComparison.Ordinal));
         }
 
         /// <summary>
@@ -133,7 +192,7 @@ namespace Duplicati.Library.Utility
         /// <returns>A list of the full paths</returns>
         public static IEnumerable<string> EnumerateFolders(string basepath)
         {
-            return EnumerateFolders(basepath, null);
+            return EnumerateFileSystemEntries(basepath).Where(x => x.EndsWith(Util.DirectorySeparatorString, StringComparison.Ordinal));
         }
 
         /// <summary>
@@ -144,49 +203,7 @@ namespace Duplicati.Library.Utility
         /// <returns>A list of the full filenames and foldernames. Foldernames ends with the directoryseparator char</returns>
         public static IEnumerable<string> EnumerateFileSystemEntries(string basepath)
         {
-            return EnumerateFileSystemEntries(basepath, (IFilter)null);
-        }
-
-        /// <summary>
-        /// Returns a list of all files found in the given folder.
-        /// The search is recursive.
-        /// </summary>
-        /// <param name="basepath">The folder to look in</param>
-        /// <param name="filter">The filter to apply.</param>
-        /// <returns>A list of the full filenames</returns>
-        public static IEnumerable<string> EnumerateFiles(string basepath, IFilter filter)
-        {
-            return EnumerateFileSystemEntries(basepath, filter).Where(x => !x.EndsWith(DirectorySeparatorString, StringComparison.Ordinal));
-        }
-
-        /// <summary>
-        /// Returns a list of folder names found in the given folder.
-        /// The search is recursive.
-        /// </summary>
-        /// <param name="basepath">The folder to look in</param>
-        /// <param name="filter">The filter to apply.</param>
-        /// <returns>A list of the full paths</returns>
-        public static IEnumerable<string> EnumerateFolders(string basepath, IFilter filter)
-        {
-            return EnumerateFileSystemEntries(basepath, filter).Where(x => x.EndsWith(DirectorySeparatorString, StringComparison.Ordinal));
-        }
-
-        /// <summary>
-        /// Returns a list of all files and subfolders found in the given folder.
-        /// The search is recursive.
-        /// </summary>
-        /// <param name="basepath">The folder to look in.</param>
-        /// <param name="filter">The filter to apply.</param>
-        /// <returns>A list of the full filenames and foldernames. Foldernames ends with the directoryseparator char</returns>
-        public static IEnumerable<string> EnumerateFileSystemEntries(string basepath, IFilter filter)
-        {
-            filter = filter ?? new FilterExpression();
-            return EnumerateFileSystemEntries(basepath, (rootpath, path, attributes) => {
-                if (!filter.Matches(path, out var result, out _))
-                    result = true;
-
-                return result;
-            });
+            return EnumerateFileSystemEntries(basepath, (rootpath, path, attributes) => true, SystemIO.IO_OS.GetDirectories, Directory.GetFiles, null);
         }
 
         /// <summary>
@@ -217,32 +234,6 @@ namespace Duplicati.Library.Utility
         /// </summary>
         /// <param name="rootpath">The folder to look in</param>
         /// <param name="callback">The function to call with the filenames</param>
-        /// <returns>A list of the full filenames</returns>
-        public static IEnumerable<string> EnumerateFileSystemEntries(string rootpath, EnumerationFilterDelegate callback)
-        {
-            return EnumerateFileSystemEntries(rootpath, callback, Directory.GetDirectories, Directory.GetFiles);
-        }
-
-        /// <summary>
-        /// Returns a list of all files found in the given folder.
-        /// The search is recursive.
-        /// </summary>
-        /// <param name="rootpath">The folder to look in</param>
-        /// <param name="callback">The function to call with the filenames</param>
-        /// <param name="folderList">A function to call that lists all folders in the supplied folder</param>
-        /// <param name="fileList">A function to call that lists all files in the supplied folder</param>
-        /// <returns>A list of the full filenames</returns>
-        public static IEnumerable<string> EnumerateFileSystemEntries(string rootpath, EnumerationFilterDelegate callback, FileSystemInteraction folderList, FileSystemInteraction fileList)
-        {
-            return EnumerateFileSystemEntries(rootpath, callback, folderList, fileList, null);
-        }
-
-        /// <summary>
-        /// Returns a list of all files found in the given folder.
-        /// The search is recursive.
-        /// </summary>
-        /// <param name="rootpath">The folder to look in</param>
-        /// <param name="callback">The function to call with the filenames</param>
         /// <param name="folderList">A function to call that lists all folders in the supplied folder</param>
         /// <param name="fileList">A function to call that lists all files in the supplied folder</param>
         /// <param name="attributeReader">A function to call that obtains the attributes for an element, set to null to avoid reading attributes</param>
@@ -254,10 +245,9 @@ namespace Duplicati.Library.Utility
 
             if (IsFolder(rootpath, attributeReader))
             {
-                rootpath = AppendDirSeparator(rootpath);
+                rootpath = Util.AppendDirSeparator(rootpath);
                 try
                 {
-
                     var attr = attributeReader?.Invoke(rootpath) ?? FileAttributes.Directory;
                     if (callback(rootpath, rootpath, attr))
                         lst.Push(rootpath);
@@ -274,7 +264,7 @@ namespace Duplicati.Library.Utility
 
                 while (lst.Count > 0)
                 {
-                    var f = AppendDirSeparator(lst.Pop());
+                    var f = lst.Pop();
 
                     yield return f;
 
@@ -282,7 +272,7 @@ namespace Duplicati.Library.Utility
                     {
                         foreach (var s in folderList(f))
                         {
-                            var sf = AppendDirSeparator(s);
+                            var sf = Util.AppendDirSeparator(s);
                             try
                             {
                                 var attr = attributeReader?.Invoke(sf) ?? FileAttributes.Directory;
@@ -406,7 +396,7 @@ namespace Duplicati.Library.Utility
         /// (note that this returns false if the two argument paths are identical!)</returns>
         public static bool IsPathBelowFolder(string fileOrFolderPath, string parentFolder)
         {
-            var sanitizedParentFolder = AppendDirSeparator(parentFolder);
+            var sanitizedParentFolder = Util.AppendDirSeparator(parentFolder);
             return fileOrFolderPath.StartsWith(sanitizedParentFolder, ClientFilenameStringComparison) && 
                    !fileOrFolderPath.Equals(sanitizedParentFolder, ClientFilenameStringComparison);
         }
@@ -428,14 +418,14 @@ namespace Duplicati.Library.Utility
             var last = path.LastIndexOf(Path.DirectorySeparatorChar, len);
             if (last == -1 || last == 0 && len == 0)
                 return null;
-
-            if (last == 0 && !IsClientWindows)
-                return DirectorySeparatorString;
+            
+            if (last == 0 && !Platform.IsClientWindows)
+                return Util.DirectorySeparatorString;
 
             var parent = path.Substring(0, last);
 
             if (forceTrailingDirectorySeparator ||
-                IsClientWindows && parent.Length == 2 && parent[1] == ':' && char.IsLetter(parent[0]))
+                Platform.IsClientWindows && parent.Length == 2 && parent[1] == ':' && char.IsLetter(parent[0]))
             {
                 parent += Path.DirectorySeparatorChar;
             }
@@ -505,51 +495,10 @@ namespace Duplicati.Library.Utility
         /// Calculates the size of files in a given folder
         /// </summary>
         /// <param name="folder">The folder to examine</param>
-        /// <param name="filter">A filter to apply</param>
         /// <returns>The combined size of all files that match the filter</returns>
-        public static long GetDirectorySize(string folder, IFilter filter)
+        public static long GetDirectorySize(string folder)
         {
-            return EnumerateFolders(folder, filter).Sum((path) => new FileInfo(path).Length);
-        }
-
-        /// <summary>
-        /// A cached instance of the directory separator as a string
-        /// </summary>
-        public static readonly string DirectorySeparatorString = Path.DirectorySeparatorChar.ToString();
-
-        /// <summary>
-        /// Appends the appropriate directory separator to paths, depending on OS.
-        /// Does not append the separator if the path already ends with it.
-        /// </summary>
-        /// <param name="path">The path to append to</param>
-        /// <returns>The path with the directory separator appended</returns>
-        public static string AppendDirSeparator(string path)
-        {
-            return AppendDirSeparator(path, DirectorySeparatorString);
-        }
-
-        /// <summary>
-        /// Appends the appropriate directory separator to paths, depending on OS.
-        /// Does not append the separator if the path already ends with it.
-        /// </summary>
-        /// <param name="path">The path to append to</param>
-        /// <param name="separator">The directory separator to use</param>
-        /// <returns>The path with the directory separator appended</returns>
-        public static string AppendDirSeparator(string path, string separator)
-        {
-            return !path.EndsWith(DirectorySeparatorString, StringComparison.Ordinal)
-                ? path + separator
-                : path;
-        }
-
-        /// <summary>
-        /// Guesses the directory separator from the path
-        /// </summary>
-        /// <param name="path">The path to guess the separator from</param>
-        /// <returns>The guessed directory separator</returns>
-        public static string GuessDirSeparator(string path)
-        {
-            return string.IsNullOrWhiteSpace(path) || path.StartsWith("/", StringComparison.Ordinal) ? "/" : "\\";
+            return EnumerateFolders(folder).Sum((path) => new FileInfo(path).Length);
         }
 
         /// <summary>
@@ -559,7 +508,7 @@ namespace Duplicati.Library.Utility
         /// </summary>
         /// <param name="stream">The stream to read</param>
         /// <param name="buf">The buffer to read into</param>
-        /// <param name="count">The amout of bytes to read</param>
+        /// <param name="count">The amount of bytes to read</param>
         /// <returns>The actual number of bytes read</returns>
         public static int ForceStreamRead(Stream stream, byte[] buf, int count)
         {
@@ -582,7 +531,7 @@ namespace Duplicati.Library.Utility
         /// </summary>
         /// <param name="stream">The stream to read.</param>
         /// <param name="buf">The buffer to read into.</param>
-        /// <param name="count">The amout of bytes to read.</param>
+        /// <param name="count">The amount of bytes to read.</param>
         /// <returns>The number of bytes read</returns>
         public static async Task<int> ForceStreamReadAsync(this System.IO.Stream stream, byte[] buf, int count)
         {
@@ -590,7 +539,7 @@ namespace Duplicati.Library.Utility
             int index = 0;
             do
             {
-                a = await stream.ReadAsync(buf, index, count);
+                a = await stream.ReadAsync(buf, index, count).ConfigureAwait(false);
                 index += a;
                 count -= a;
             } while (a != 0 && count > 0);
@@ -648,17 +597,6 @@ namespace Duplicati.Library.Utility
         }
 
         /// <summary>
-        /// Calculates the hash of a given file, and returns the results as an base64 encoded string
-        /// </summary>
-        /// <param name="path">The path to the file to calculate the hash for</param>
-        /// <returns>The base64 encoded hash</returns>
-        public static string CalculateHash(string path)
-        {
-            using (FileStream fs = File.Open(path, FileMode.Open, FileAccess.Read, FileShare.Read))
-                return CalculateHash(fs);
-        }
-
-        /// <summary>
         /// Calculates the hash of a given stream, and returns the results as an base64 encoded string
         /// </summary>
         /// <param name="stream">The stream to calculate the hash for</param>
@@ -680,7 +618,9 @@ namespace Duplicati.Library.Utility
             // So we read the first 4096 bytes and try to decode them as UTF8. 
             var buffer = new byte[4096];
             using (var file = new FileStream(filename, FileMode.Open, FileAccess.Read, FileShare.Read))
-                file.Read(buffer, 0, 4096);
+            {
+                Utility.ForceStreamRead(file, buffer, 4096);
+            }
 
             var enc = Encoding.UTF8;
             try
@@ -727,7 +667,7 @@ namespace Duplicati.Library.Utility
             if (string.IsNullOrEmpty(value) || value.Trim().Length == 0)
                 return System.Threading.ThreadPriority.Normal;
 
-            switch (value.ToLower().Trim())
+            switch (value.ToLower(CultureInfo.InvariantCulture).Trim())
             {
                 case "+2":
                 case "high":
@@ -766,7 +706,7 @@ namespace Duplicati.Library.Utility
                 return defaultFunc();
             }
 
-            switch (value.Trim().ToLower())
+            switch (value.Trim().ToLower(CultureInfo.InvariantCulture))
             {
                 case "1":
                 case "on":
@@ -854,25 +794,26 @@ namespace Duplicati.Library.Utility
         /// <returns>The string as byte array.</returns>
         /// <param name="hex">The hex string</param>
         /// <param name="data">The parsed data</param>
-        public static byte[] HexStringAsByteArray(string hex, byte[] data)
+        public static void HexStringAsByteArray(string hex, byte[] data)
         {
             for (var i = 0; i < hex.Length; i += 2)
                 data[i / 2] = Convert.ToByte(hex.Substring(i, 2), 16);
-
-            return data;
         }
-
 
         public static bool Which(string appname)
         {
-            if (!IsClientLinux)
+            if (!Platform.IsClientPosix)
                 return false;
 
             try
             {
-                var psi = new System.Diagnostics.ProcessStartInfo("which", appname);
-                psi.RedirectStandardOutput = true;
-                psi.UseShellExecute = false;
+                var psi = new System.Diagnostics.ProcessStartInfo("which", appname)
+                {
+                    RedirectStandardOutput = true,
+                    RedirectStandardError = false,
+                    RedirectStandardInput = false,
+                    UseShellExecute = false
+                };
 
                 var pi = System.Diagnostics.Process.Start(psi);
                 pi.WaitForExit(5000);
@@ -888,83 +829,6 @@ namespace Duplicati.Library.Utility
             return false;
         }
 
-        private static string UNAME;
-
-        /// <value>
-        /// Gets or sets a value indicating if the client is running OSX
-        /// </value>
-        public static bool IsClientOSX
-        {
-            get
-            {
-                // Sadly, Mono returns Unix when running on OSX
-                //return Environment.OSVersion.Platform == PlatformID.MacOSX;
-
-                if (!IsClientLinux)
-                    return false;
-
-                try
-                {
-                    if (UNAME == null)
-                    {
-                        var psi = new System.Diagnostics.ProcessStartInfo("uname")
-                        {
-                            RedirectStandardOutput = true,
-                            UseShellExecute = false
-                        };
-
-                        var pi = System.Diagnostics.Process.Start(psi);
-                        pi.WaitForExit(5000);
-                        if (pi.HasExited)
-                            UNAME = pi.StandardOutput.ReadToEnd().Trim();
-                    }
-                }
-                catch
-                {
-                }
-
-                return "Darwin".Equals(UNAME);
-
-            }
-        }
-        /// <value>
-        /// Gets the output of "uname -a" on Linux, or null on Windows
-        /// </value>
-        public static string UnameAll
-        {
-            get
-            {
-                if (!IsClientLinux)
-                    return null;
-
-                try
-                {
-                    var psi = new System.Diagnostics.ProcessStartInfo("uname", "-a");
-                    psi.RedirectStandardOutput = true;
-                    psi.UseShellExecute = false;
-
-                    var pi = System.Diagnostics.Process.Start(psi);
-                    pi.WaitForExit(5000);
-                    if (pi.HasExited)
-                        return pi.StandardOutput.ReadToEnd().Trim();
-                }
-                catch
-                {
-                    // ignored
-                }
-
-                return null;
-            }
-        }
-        /// <value>
-        /// Gets or sets a value indicating if the client is Linux/Unix based
-        /// </value>
-        public static bool IsClientLinux => Environment.OSVersion.Platform == PlatformID.Unix || Environment.OSVersion.Platform == PlatformID.MacOSX;
-
-        /// <summary>
-        /// Gets a value indicating if the client is Windows based
-        /// </summary>
-        public static bool IsClientWindows => !IsClientLinux;
 
         /// <value>
         /// Returns a value indicating if the filesystem, is case sensitive 
@@ -978,8 +842,8 @@ namespace Duplicati.Library.Utility
                     var str = Environment.GetEnvironmentVariable("FILESYSTEM_CASE_SENSITIVE");
 
                     // TODO: This should probably be determined by filesystem rather than OS,
-                    // OSX can actually have the disks formated as Case Sensitive, but insensitive is default
-                    CachedIsFSCaseSensitive = ParseBool(str, () => IsClientLinux && !IsClientOSX);
+                    // OSX can actually have the disks formatted as Case Sensitive, but insensitive is default
+                    CachedIsFSCaseSensitive = ParseBool(str, () => Platform.IsClientPosix && !Platform.IsClientOSX);
                 }
 
                 return CachedIsFSCaseSensitive.Value;
@@ -1045,88 +909,24 @@ namespace Duplicati.Library.Utility
         }
 
         /// <summary>
-        /// Gets the users default UI language
-        /// </summary>
-        public static System.Globalization.CultureInfo DefaultCulture => new System.Threading.Thread(() => { }).CurrentUICulture;
-
-        /// <summary>
         /// Gets a string comparer that matches the client filesystems case sensitivity
         /// </summary>
-        public static StringComparer ClientFilenameStringComparer => IsFSCaseSensitive ? StringComparer.CurrentCulture : StringComparer.CurrentCultureIgnoreCase;
+        public static StringComparer ClientFilenameStringComparer => IsFSCaseSensitive ? StringComparer.Ordinal : StringComparer.OrdinalIgnoreCase;
 
         /// <summary>
         /// Gets the string comparision that matches the client filesystems case sensitivity
         /// </summary>
-        public static StringComparison ClientFilenameStringComparison => IsFSCaseSensitive ? StringComparison.CurrentCulture : StringComparison.CurrentCultureIgnoreCase;
-
-        /// <summary>
-        /// Searches the system paths for the file specified
-        /// </summary>
-        /// <param name="filename">The file to locate</param>
-        /// <returns>The full path to the file, or null if the file was not found</returns>
-        public static string LocateFileInSystemPath(string filename)
-        {
-            try
-            {
-                if (Path.IsPathRooted(filename))
-                    return File.Exists(filename) ? filename : null;
-
-                try
-                {
-                    filename = Path.GetFileName(filename);
-                }
-                catch
-                {
-                    // ignored
-                }
-
-                string homedir = Path.GetDirectoryName(System.Reflection.Assembly.GetExecutingAssembly().Location) + Path.PathSeparator.ToString();
-
-                //Look in application base folder and all system path folders
-                foreach (string s in (homedir + Environment.GetEnvironmentVariable("PATH")).Split(Path.PathSeparator))
-                    if (!string.IsNullOrEmpty(s) && s.Trim().Length > 0)
-                        try
-                        {
-                            foreach (string sx in Directory.GetFiles(ExpandEnvironmentVariables(s), filename))
-                                return sx;
-                        }
-                        catch
-                        {
-                            // ignored
-                        }
-            }
-            catch
-            {
-                // ignored
-            }
-
-            return null;
-        }
+        public static StringComparison ClientFilenameStringComparison => IsFSCaseSensitive ? StringComparison.Ordinal : StringComparison.OrdinalIgnoreCase;
 
         /// <summary>
         /// The path to the users home directory
         /// </summary>
-        public static readonly string HOME_PATH = Environment.GetFolderPath(IsClientLinux ? Environment.SpecialFolder.Personal : Environment.SpecialFolder.UserProfile);
-
-        /// <summary>
-        /// Expands environment variables.
-        /// </summary>
-        /// <returns>The expanded string.</returns>
-        /// <param name="str">The string to expand.</param>
-        public static string ExpandEnvironmentVariables(string str)
-        {
-            return Environment.ExpandEnvironmentVariables(str);
-        }
+        public static readonly string HOME_PATH = Environment.GetFolderPath(Platform.IsClientPosix ? Environment.SpecialFolder.Personal : Environment.SpecialFolder.UserProfile);
 
         /// <summary>
         /// Regexp for matching environment variables on Windows (%VAR%)
         /// </summary>
         private static readonly Regex ENVIRONMENT_VARIABLE_MATCHER_WINDOWS = new Regex(@"\%(?<name>\w+)\%");
-
-        /// <summary>
-        /// Regexp for matching environment variables on Linux ($VAR or ${VAR})
-        /// </summary>
-        private static readonly Regex ENVIRONMENT_VARIABLE_MATCHER_LINUX = new Regex(@"\$(?<name>\w+)|(\{(?<name>[^\}]+)\})");
 
         /// <summary>
         /// Expands environment variables in a RegExp safe format
@@ -1141,29 +941,39 @@ namespace Duplicati.Library.Utility
 
             return
 
-                // TODO: Should we switch to using the native format, instead of following the Windows scheme?
-                //IsClientLinux ? ENVIRONMENT_VARIABLE_MATCHER_LINUX : ENVIRONMENT_VARIABLE_MATCHER_WINDOWS
+                // TODO: Should we switch to using the native format ($VAR or ${VAR}), instead of following the Windows scheme?
+                // IsClientLinux ? new Regex(@"\$(?<name>\w+)|(\{(?<name>[^\}]+)\})") : ENVIRONMENT_VARIABLE_MATCHER_WINDOWS
 
                 ENVIRONMENT_VARIABLE_MATCHER_WINDOWS.Replace(str, m => Regex.Escape(lookup(m.Groups["name"].Value)));
         }
-
+        
         /// <summary>
-        /// Checks that a hostname is valid
+        /// Normalizes a DateTime instance by converting to UTC and flooring to seconds.
         /// </summary>
-        /// <param name="hostname">The hostname to verify</param>
-        /// <returns>True if the hostname is valid, false otherwise</returns>
-        public static bool IsValidHostname(string hostname)
+        /// <returns>The normalized date time</returns>
+        /// <param name="input">The input time</param>
+        public static DateTime NormalizeDateTime(DateTime input)
         {
-            try
-            {
-                return System.Uri.CheckHostName(hostname) != UriHostNameType.Unknown;
-            }
-            catch
-            {
-                return false;
-            }
+            var ticks = input.ToUniversalTime().Ticks;
+            ticks -= ticks % TimeSpan.TicksPerSecond;
+            return new DateTime(ticks, DateTimeKind.Utc);
         }
-
+        
+	/// <summary>
+	/// Given a DateTime instance, return the number of elapsed seconds since the Unix epoch
+	/// </summary>
+	/// <returns>The number of elapsed seconds since the Unix epoch</returns>
+	/// <param name="input">The input time</param>
+        public static long NormalizeDateTimeToEpochSeconds(DateTime input)
+        {
+            // Note that we cannot return (new DateTimeOffset(input)).ToUnixTimeSeconds() here.
+            // The DateTimeOffset constructor will convert the provided DateTime to the UTC
+            // equivalent.  However, if DateTime.MinValue is provided (for example, when creating
+            // a new backup), this can result in values that fall outside the DateTimeOffset.MinValue
+            // and DateTimeOffset.MaxValue bounds.
+            return (long) Math.Floor((NormalizeDateTime(input) - EPOCH).TotalSeconds);
+        }
+        
         /// <summary>
         /// The format string for a DateTime
         /// </summary>
@@ -1237,34 +1047,6 @@ namespace Duplicati.Library.Utility
             return uniqueItems;
         }
 
-        /// <summary>
-        /// Helper method that replaces one file with another
-        /// </summary>
-        /// <param name="target">The file to replace</param>
-        /// <param name="sourcefile">The file to replace with</param>
-        public static void ReplaceFile(string target, string sourcefile)
-        {
-            if (File.Exists(target))
-                File.Delete(target);
-
-            //Nasty workaround for the fact that a recently deleted file occasionally blocks a new write
-            long i = 5;
-            do
-            {
-                try
-                {
-                    File.Move(sourcefile, target);
-                    break;
-                }
-                catch (Exception ex)
-                {
-                    if (i == 0)
-                        throw new Exception(
-                            $"Failed to replace the file \"{target}\" volume with the \"{sourcefile}\", error: {ex.Message}");
-                    System.Threading.Thread.Sleep(250);
-                }
-            } while (i-- > 0);
-        }
         // <summary>
         // Returns the entry assembly or reasonable approximation if no entry assembly is available.
         // This is the case in NUnit tests.  The following approach does not work w/ Mono due to unimplemented members:
@@ -1311,17 +1093,6 @@ namespace Duplicati.Library.Utility
         }
 
         /// <summary>
-        /// Decodes a &quot;base64 for url&quot; encoded string into the raw byte array.
-        /// See https://en.wikipedia.org/wiki/Base64#URL_applications
-        /// </summary>
-        /// <param name="data">The data to decode</param>
-        /// <returns>The raw data</returns>
-        public static byte[] Base64UrlDecode(string data)
-        {
-            return Convert.FromBase64String(Base64UrlToBase64Plain(data));
-        }
-
-        /// <summary>
         /// Converts a DateTime instance to a Unix timestamp
         /// </summary>
         /// <returns>The Unix timestamp.</returns>
@@ -1333,16 +1104,6 @@ namespace Duplicati.Library.Utility
             input = new DateTime(ticks, DateTimeKind.Utc);
 
             return (long)Math.Floor((input - EPOCH).TotalSeconds);
-        }
-
-        /// <summary>
-        /// Converts a Unix timestamp to a DateTime instance
-        /// </summary>
-        /// <returns>The DateTime instance represented by the timestamp.</returns>
-        /// <param name="input">The Unix timestamp to use.</param>
-        public static DateTime ToUnixTimestamp(long input)
-        {
-            return EPOCH.AddSeconds(input);
         }
 
         /// <summary>
@@ -1371,11 +1132,11 @@ namespace Duplicati.Library.Utility
 
             if (IsPrimitiveTypeForSerialization(item.GetType()))
             {
-                if (item is DateTime)
+                if (item is DateTime time)
                 {
-                    writer.Write(((DateTime)item).ToLocalTime());
+                    writer.Write(time.ToLocalTime());
                     writer.Write(" (");
-                    writer.Write(ToUnixTimestamp((DateTime)item));
+                    writer.Write(ToUnixTimestamp(time));
                     writer.Write(")");
                 }
                 else
@@ -1395,7 +1156,7 @@ namespace Duplicati.Library.Utility
         /// <param name="filter">A filter applied to properties to decide if they are omitted or not</param>
         /// <param name="recurseobjects">A value indicating if non-primitive values are recursed</param>
         /// <param name="indentation">The string indentation</param>
-        /// <param name="visited">A lookup table with visited objects, used to avoid inifinite recursion</param>
+        /// <param name="visited">A lookup table with visited objects, used to avoid infinite recursion</param>
         /// <param name="collectionlimit">The maximum number of items to report from an IEnumerable instance</param>
         public static void PrintSerializeObject(object item, TextWriter writer, Func<System.Reflection.PropertyInfo, object, bool> filter = null, bool recurseobjects = false, int indentation = 0, int collectionlimit = 0, Dictionary<object, object> visited = null)
         {
@@ -1426,6 +1187,11 @@ namespace Duplicati.Library.Utility
 
                     writer.Write("{0}{1}: ", indentstring, p.Name);
                     PrintSerializeIfPrimitive(p.GetValue(item, null), writer);
+                }
+                else if (typeof(Task).IsAssignableFrom(p.PropertyType) || p.Name == "TaskReader")
+                {
+                    // Ignore Task items
+                    continue;
                 }
                 else if (typeof(System.Collections.IEnumerable).IsAssignableFrom(p.PropertyType))
                 {
@@ -1638,7 +1404,7 @@ namespace Duplicati.Library.Utility
         /// <summary>
         /// Special characters that needs to be escaped on Linux
         /// </summary>
-        private static readonly Regex COMMANDLINE_ESCAPED_LINUX = new Regex(@"[""|$|`|\\|!]");
+        private static readonly Regex COMMANDLINE_ESCAPED_LINUX = new Regex(@"[""$`\\!]");
 
         /// <summary>
         /// Wraps a single argument in quotes suitable for the passing on the commandline
@@ -1651,7 +1417,7 @@ namespace Duplicati.Library.Utility
             if (string.IsNullOrWhiteSpace(arg))
                 return arg;
 
-            if (!IsClientWindows)
+            if (!Platform.IsClientWindows)
             {
                 // We could consider using single quotes that prevents all expansions
                 //if (!allowEnvExpansion)

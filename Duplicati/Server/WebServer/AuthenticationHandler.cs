@@ -41,11 +41,11 @@ namespace Duplicati.Server.WebServer
         private const int XSRF_TIMEOUT_MINUTES = 10;
         private const int AUTH_TIMEOUT_MINUTES = 10;
 
-        private ConcurrentDictionary<string, DateTime> m_activeTokens = new ConcurrentDictionary<string, DateTime>();
-        private ConcurrentDictionary<string, Tuple<DateTime, string>> m_activeNonces = new ConcurrentDictionary<string, Tuple<DateTime, string>>();
-        private ConcurrentDictionary<string, DateTime> m_activexsrf = new ConcurrentDictionary<string, DateTime>();
+        private readonly ConcurrentDictionary<string, DateTime> m_activeTokens = new ConcurrentDictionary<string, DateTime>();
+        private readonly ConcurrentDictionary<string, Tuple<DateTime, string>> m_activeNonces = new ConcurrentDictionary<string, Tuple<DateTime, string>>();
+        private readonly ConcurrentDictionary<string, DateTime> m_activexsrf = new ConcurrentDictionary<string, DateTime>();
 
-        System.Security.Cryptography.RandomNumberGenerator m_prng = System.Security.Cryptography.RNGCryptoServiceProvider.Create();
+        readonly System.Security.Cryptography.RandomNumberGenerator m_prng = System.Security.Cryptography.RNGCryptoServiceProvider.Create();
 
         private string FindXSRFToken(HttpServer.IHttpRequest request)
         {
@@ -104,11 +104,9 @@ namespace Duplicati.Server.WebServer
 
         private bool HasXSRFCookie(HttpServer.IHttpRequest request)
         {
-            DateTime tmpExpirationTimeHolder;
-
             // Clean up expired XSRF cookies
             foreach (var k in (from n in m_activexsrf where DateTime.UtcNow > n.Value select n.Key))
-                m_activexsrf.TryRemove(k, out tmpExpirationTimeHolder);
+                m_activexsrf.TryRemove(k, out _);
 
             var xsrfcookie = request.Cookies[XSRF_COOKIE_NAME] ?? request.Cookies[Library.Utility.Uri.UrlEncode(XSRF_COOKIE_NAME)];
             var value = xsrfcookie == null ? null : xsrfcookie.Value;
@@ -131,7 +129,7 @@ namespace Duplicati.Server.WebServer
 
         public override bool Process(HttpServer.IHttpRequest request, HttpServer.IHttpResponse response, HttpServer.Sessions.IHttpSession session)
         {
-            HttpServer.HttpInput input = request.Method.ToUpper() == "POST" ? request.Form : request.QueryString;
+            HttpServer.HttpInput input = String.Equals(request.Method, "POST", StringComparison.OrdinalIgnoreCase) ? request.Form : request.QueryString;
 
             var auth_token = FindAuthCookie(request);
             var xsrf_token = FindXSRFToken(request);
@@ -147,15 +145,13 @@ namespace Duplicati.Server.WebServer
                     return true;
                 }
             }
-            Tuple<DateTime, string> tmpTuple;
-            DateTime tmpDateTime;
 
             if (LOGOUT_SCRIPT_URI.Equals(request.Uri.AbsolutePath, StringComparison.OrdinalIgnoreCase))
             {
                 if (!string.IsNullOrWhiteSpace(auth_token))
                 {
                     // Remove the active auth token
-                    m_activeTokens.TryRemove(auth_token, out tmpDateTime);
+                    m_activeTokens.TryRemove(auth_token, out _);
                 }
 
                 response.Status = System.Net.HttpStatusCode.NoContent;
@@ -167,7 +163,7 @@ namespace Duplicati.Server.WebServer
             {
                 // Remove expired nonces
                 foreach(var k in (from n in m_activeNonces where DateTime.UtcNow > n.Value.Item1 select n.Key))
-                    m_activeNonces.TryRemove(k, out tmpTuple);
+                    m_activeNonces.TryRemove(k, out _);
 
                 if (input["get-nonce"] != null && !string.IsNullOrWhiteSpace(input["get-nonce"].Value))
                 {
@@ -233,7 +229,7 @@ namespace Duplicati.Server.WebServer
                         var pwd = m_activeNonces[nonce].Item2;
 
                         // Remove the nonce
-                        m_activeNonces.TryRemove(nonce, out tmpTuple);
+                        m_activeNonces.TryRemove(nonce, out _);
 
                         if (pwd != input["password"].Value)
                         {
@@ -296,7 +292,7 @@ namespace Duplicati.Server.WebServer
                 return false;
 
             foreach(var k in (from n in m_activeTokens where DateTime.UtcNow > n.Value select n.Key))
-                m_activeTokens.TryRemove(k, out tmpDateTime);
+                m_activeTokens.TryRemove(k, out _);
 
 
             // If we have a valid token, proceed

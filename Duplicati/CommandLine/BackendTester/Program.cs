@@ -22,11 +22,21 @@ using System.Collections.Generic;
 using System.Text;
 using Duplicati.Library.Interface;
 using System.Linq;
+using System.Globalization;
+using System.Threading;
 
 namespace Duplicati.CommandLine.BackendTester
 {
     class Program
     {
+
+        /// <summary>
+        /// Used to maintain a reference to initialized system settings.
+        /// </summary>
+        #pragma warning disable CS0414 // The private field `Duplicati.CommandLine.BackendTester.Program.SystemSettings' is assigned but its value is never used
+        private static IDisposable SystemSettings;
+        #pragma warning restore CS0414 // The private field `Duplicati.CommandLine.BackendTester.Program.SystemSettings' is assigned but its value is never used
+
         class TempFile
         {
             public readonly string remotefilename;
@@ -65,7 +75,7 @@ namespace Duplicati.CommandLine.BackendTester
                 {
                     try
                     {
-                        var p = Library.Utility.Utility.ExpandEnvironmentVariables(_args[0]);
+                        var p = Environment.ExpandEnvironmentVariables(_args[0]);
                         if (System.IO.File.Exists(p))
                             _args = (from x in System.IO.File.ReadLines(p)
                                 where !string.IsNullOrWhiteSpace(x) && !x.Trim().StartsWith("#", StringComparison.Ordinal)
@@ -80,16 +90,7 @@ namespace Duplicati.CommandLine.BackendTester
                 List<string> args = new List<string>(_args);
                 Dictionary<string, string> options = Library.Utility.CommandLineParser.ExtractOptions(args);
 
-                if (!options.ContainsKey("auth_password") && !string.IsNullOrEmpty(System.Environment.GetEnvironmentVariable("AUTH_PASSWORD")))
-                    options["auth_password"] = System.Environment.GetEnvironmentVariable("AUTH_PASSWORD");
-
-                if (!options.ContainsKey("auth_username") && !string.IsNullOrEmpty(System.Environment.GetEnvironmentVariable("AUTH_USERNAME")))
-                    options["auth_username"] = System.Environment.GetEnvironmentVariable("AUTH_USERNAME");
-
-                if (options.ContainsKey("tempdir") && !string.IsNullOrEmpty(options["tempdir"]))
-                    Library.Utility.TempFolder.SetSystemTempPath(options["tempdir"]);
-
-                if (args.Count != 1 || args[0].ToLower() == "help" || args[0] == "?")
+                if (args.Count != 1 || String.Equals(args[0], "help", StringComparison.OrdinalIgnoreCase) || args[0] == "?")
                 {
                     Console.WriteLine("Usage: <protocol>://<username>:<password>@<path>");
                     Console.WriteLine("Example: ftp://user:pass@server/folder");
@@ -106,6 +107,17 @@ namespace Duplicati.CommandLine.BackendTester
 
                     return;
                 }
+
+                if (options.ContainsKey("tempdir") && !string.IsNullOrEmpty(options["tempdir"]))
+                    Library.Utility.SystemContextSettings.DefaultTempPath = options["tempdir"];
+                
+                SystemSettings = Duplicati.Library.Utility.SystemContextSettings.StartSession();
+
+                if (!options.ContainsKey("auth_password") && !string.IsNullOrEmpty(System.Environment.GetEnvironmentVariable("AUTH_PASSWORD")))
+                    options["auth_password"] = System.Environment.GetEnvironmentVariable("AUTH_PASSWORD");
+
+                if (!options.ContainsKey("auth_username") && !string.IsNullOrEmpty(System.Environment.GetEnvironmentVariable("AUTH_USERNAME")))
+                    options["auth_username"] = System.Environment.GetEnvironmentVariable("AUTH_USERNAME");
 
                 int reruns = 5;
                 if (options.ContainsKey("reruns"))
@@ -127,14 +139,6 @@ namespace Duplicati.CommandLine.BackendTester
 
         static bool Run(List<string> args, Dictionary<string, string> options, bool first)
         {
-            string allowedChars = ValidFilenameChars;
-            if (options.ContainsKey("extended-chars"))
-                allowedChars += options["extended-chars"];
-            else
-                allowedChars += ExtendedChars;
-
-            bool autoCreateFolders = Library.Utility.Utility.ParseBoolOption(options, "auto-create-folder");
-
             Library.Interface.IBackend backend = Library.DynamicLoader.BackendLoader.GetBackend(args[0], options);
             if (backend == null)
             {
@@ -144,16 +148,24 @@ namespace Duplicati.CommandLine.BackendTester
                 return false;
             }
 
+            string allowedChars = ValidFilenameChars;
+            if (options.ContainsKey("extended-chars"))
+            {
+                allowedChars += String.IsNullOrEmpty(options["extended-chars"]) ? ExtendedChars : options["extended-chars"];
+            }
+
+            bool autoCreateFolders = Library.Utility.Utility.ParseBoolOption(options, "auto-create-folder");
+
             string disabledModulesValue;
             string enabledModulesValue;
             options.TryGetValue("enable-module", out enabledModulesValue);
             options.TryGetValue("disable-module", out disabledModulesValue);
-            string[] enabledModules = enabledModulesValue == null ? new string[0] : enabledModulesValue.Trim().ToLower().Split(',');
-            string[] disabledModules = disabledModulesValue == null ? new string[0] : disabledModulesValue.Trim().ToLower().Split(',');
+            string[] enabledModules = enabledModulesValue == null ? new string[0] : enabledModulesValue.Trim().ToLower(CultureInfo.InvariantCulture).Split(',');
+            string[] disabledModules = disabledModulesValue == null ? new string[0] : disabledModulesValue.Trim().ToLower(CultureInfo.InvariantCulture).Split(',');
 
             List<Library.Interface.IGenericModule> loadedModules = new List<IGenericModule>();
             foreach (Library.Interface.IGenericModule m in Library.DynamicLoader.GenericLoader.Modules)
-                if (Array.IndexOf<string>(disabledModules, m.Key.ToLower()) < 0 && (m.LoadAsDefault || Array.IndexOf<string>(enabledModules, m.Key.ToLower()) >= 0))
+                if (!disabledModules.Contains(m.Key, StringComparer.OrdinalIgnoreCase) && (m.LoadAsDefault || enabledModules.Contains(m.Key, StringComparer.OrdinalIgnoreCase)))
                 {
                     m.Configure(options);
                     loadedModules.Add(m);
@@ -167,7 +179,7 @@ namespace Duplicati.CommandLine.BackendTester
                     backend.Test();
                     curlist = backend.List();
                 }
-                catch (FolderMissingException fex)
+                catch (FolderMissingException)
                 {
                     if (autoCreateFolders)
                     {
@@ -183,7 +195,7 @@ namespace Duplicati.CommandLine.BackendTester
                     }
 
                     if (curlist == null)
-                        throw fex;
+                        throw;
                 }
 
                 foreach (Library.Interface.IFileEntry fe in curlist)
@@ -330,11 +342,11 @@ namespace Duplicati.CommandLine.BackendTester
 
                             try
                             {
-                                if (backend is Library.Interface.IStreamingBackend && !disableStreaming)
+                                if (backend is IStreamingBackend streamingBackend && !disableStreaming)
                                 {
                                     using (System.IO.FileStream fs = new System.IO.FileStream(cf, System.IO.FileMode.Create, System.IO.FileAccess.Write, System.IO.FileShare.None))
                                     using (NonSeekableStream nss = new NonSeekableStream(fs))
-                                        (backend as Library.Interface.IStreamingBackend).Get(files[i].remotefilename, nss);
+                                        streamingBackend.Get(files[i].remotefilename, nss);
                                 }
                                 else
                                     backend.Get(files[i].remotefilename, cf);
@@ -382,6 +394,30 @@ namespace Duplicati.CommandLine.BackendTester
                             Console.WriteLine("*** Remote folder contains {0} after cleanup", fe.Name);
                         }
 
+                    // Test some error cases
+                    Console.WriteLine("Checking retrieval of non-existent file...");
+                    bool caughtExpectedException = false;
+                    try
+                    {
+                        using (Duplicati.Library.Utility.TempFile tempFile = new Duplicati.Library.Utility.TempFile())
+                        {
+                            backend.Get(string.Format("NonExistentFile-{0}", Guid.NewGuid()), tempFile.Name);
+                        }
+                    }
+                    catch (FileMissingException)
+                    {
+                        Console.WriteLine("Caught expected FileMissingException");
+                        caughtExpectedException = true;
+                    }
+                    catch (Exception ex)
+                    {
+                        Console.WriteLine("*** Retrieval of non-existent file failed: {0}", ex);
+                    }
+
+                    if (!caughtExpectedException)
+                    {
+                        Console.WriteLine("*** Retrieval of non-existent file should have failed with FileMissingException");
+                    }
                 }
 
                 // Test quota retrieval
@@ -441,8 +477,8 @@ namespace Duplicati.CommandLine.BackendTester
             finally
             {
                 foreach (Library.Interface.IGenericModule m in loadedModules)
-                    if (m is IDisposable)
-                        ((IDisposable)m).Dispose();
+                    if (m is IDisposable disposable)
+                        disposable.Dispose();
             }
 
             return true;
@@ -455,14 +491,14 @@ namespace Duplicati.CommandLine.BackendTester
 
             try
             {
-                if (backend is Library.Interface.IStreamingBackend && !disableStreaming)
+                if (backend is IStreamingBackend streamingBackend && !disableStreaming)
                 {
                     using (System.IO.FileStream fs = new System.IO.FileStream(localfilename, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.Read))
                     using (NonSeekableStream nss = new NonSeekableStream(fs))
-                        (backend as Library.Interface.IStreamingBackend).Put(remotefilename, nss);
+                        streamingBackend.PutAsync(remotefilename, nss, CancellationToken.None).Wait();
                 }
                 else
-                    backend.Put(remotefilename, localfilename);
+                    backend.PutAsync(remotefilename, localfilename, CancellationToken.None).Wait();
 
                 e = null;
             }
@@ -477,7 +513,7 @@ namespace Duplicati.CommandLine.BackendTester
                 while (e.InnerException != null)
                 {
                     e = e.InnerException;
-                    Console.WriteLine(string.Format("  Inner exception: {0}", e));
+                    Console.WriteLine("  Inner exception: {0}", e);
                 }
             }
             else

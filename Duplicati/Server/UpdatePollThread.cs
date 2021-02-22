@@ -27,12 +27,12 @@ namespace Duplicati.Server
     /// </summary>
     public class UpdatePollThread
     {
-        private Thread m_thread;
+        private readonly Thread m_thread;
         private volatile bool m_terminated = false;
         private volatile bool m_download = false;
         private volatile bool m_forceCheck = false;
         private readonly object m_lock = new object();
-        private AutoResetEvent m_waitSignal;
+        private readonly AutoResetEvent m_waitSignal;
         private double m_downloadProgress;
 
         public bool IsUpdateRequested { get; private set; } = false;
@@ -187,7 +187,7 @@ namespace Duplicati.Server
                                     "NewUpdateFound",
                                     null,
                                     (self, all) => {
-                                        return all.Where(x => x.Action == "update:new").FirstOrDefault() ?? self;
+                                        return all.FirstOrDefault(x => x.Action == "update:new") ?? self;
                                     }
                                 );
                     }

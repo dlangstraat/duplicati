@@ -22,7 +22,7 @@ namespace Duplicati.Library.Utility
 {
     public class FilterCollector
     {
-        private List<Library.Utility.IFilter> m_filters = new List<Library.Utility.IFilter>();
+        private readonly List<Library.Utility.IFilter> m_filters = new List<Library.Utility.IFilter>();
         private Library.Utility.IFilter Filter
         {
             get
@@ -47,7 +47,7 @@ namespace Duplicati.Library.Utility
 
                     if (include || exclude)
                     {
-                        m_filters.Add(new Library.Utility.FilterExpression(Library.Utility.Utility.ExpandEnvironmentVariables(value), include));
+                        m_filters.Add(new Library.Utility.FilterExpression(Environment.ExpandEnvironmentVariables(value), include));
                         return false;
                     }
                 }

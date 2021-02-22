@@ -64,9 +64,6 @@ namespace Duplicati.Library.DynamicLoader
                 if (string.IsNullOrEmpty(fileExtension))
                     throw new ArgumentNullException(nameof(fileExtension));
 
-                if (string.IsNullOrEmpty(passphrase))
-                    throw new ArgumentNullException(nameof(passphrase));
-
                 LoadInterfaces();
 
                 lock (m_lock)
@@ -104,7 +101,7 @@ namespace Duplicati.Library.DynamicLoader
         /// <summary>
         /// The static instance used to access encryption module information
         /// </summary>
-        private static EncryptionLoaderSub _encryptionLoader = new EncryptionLoaderSub();
+        private static readonly EncryptionLoaderSub _encryptionLoader = new EncryptionLoaderSub();
 
         #region Public static API
 

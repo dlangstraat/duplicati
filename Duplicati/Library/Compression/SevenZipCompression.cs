@@ -55,7 +55,7 @@ namespace Duplicati.Library.Compression
         /// you may reuse it and have to dispose it yourself.
         /// </summary>
         /// <param name="stream">The stream to read or write depending access mode</param>
-        /// <param name="mode">The archive acces mode</param>
+        /// <param name="mode">The archive access mode</param>
         /// <param name="options">The options passed on the commandline</param>
         public SevenZipCompression(Stream stream, ArchiveMode mode, IDictionary<string, string> options)
         {
@@ -222,8 +222,8 @@ namespace Duplicati.Library.Compression
 
         private sealed class WriterEntry : ManagedLzma.LZMA.Master.SevenZip.IArchiveWriterEntry
         {
-            private string mName;
-            private DateTime? mTimestamp;
+            private readonly string mName;
+            private readonly DateTime? mTimestamp;
 
             internal WriterEntry(string name, DateTime? timestamp)
             {

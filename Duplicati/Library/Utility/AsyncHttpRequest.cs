@@ -17,7 +17,7 @@ namespace Duplicati.Library.Utility
         /// <summary>
         /// The <see cref="System.Net.HttpWebRequest"/> method being wrapped
         /// </summary>
-        private WebRequest m_request;
+        private readonly WebRequest m_request;
         /// <summary>
         /// The current internal state of the object
         /// </summary>
@@ -37,7 +37,7 @@ namespace Duplicati.Library.Utility
         /// <summary>
         /// The activity timeout value
         /// </summary>
-        private int m_activity_timeout = (int)TimeSpan.FromSeconds(30).TotalMilliseconds;
+        private readonly int m_activity_timeout = (int)TimeSpan.FromSeconds(30).TotalMilliseconds;
 
         /// <summary>
         /// List of valid states
@@ -99,15 +99,15 @@ namespace Duplicati.Library.Utility
             m_request.Timeout = System.Threading.Timeout.Infinite;
 
             //Then we register custom settings
-            if (m_request is HttpWebRequest)
+            if (this.m_request is HttpWebRequest webRequest)
             {
-                if (((HttpWebRequest)m_request).ReadWriteTimeout != System.Threading.Timeout.Infinite)
-                    m_activity_timeout = ((HttpWebRequest)m_request).ReadWriteTimeout;
+                if (webRequest.ReadWriteTimeout != System.Threading.Timeout.Infinite)
+                    m_activity_timeout = webRequest.ReadWriteTimeout;
 
-                ((HttpWebRequest)m_request).ReadWriteTimeout = System.Threading.Timeout.Infinite;
+                webRequest.ReadWriteTimeout = System.Threading.Timeout.Infinite;
 
                 // Prevent in-memory buffering causing out-of-memory issues
-                ((HttpWebRequest)m_request).AllowReadStreamBuffering = HttpContextSettings.BufferRequests;
+                webRequest.AllowReadStreamBuffering = HttpContextSettings.BufferRequests;
             }
 		}
 
@@ -129,12 +129,12 @@ namespace Duplicati.Library.Utility
         public Stream GetRequestStream(long contentlength = -1)
         {
             // Prevent in-memory buffering causing out-of-memory issues
-            if (m_request is HttpWebRequest)
+            if (this.m_request is HttpWebRequest request)
             {
                 if (contentlength >= 0)
-                    ((HttpWebRequest)m_request).ContentLength = contentlength;
-                if (m_request.ContentLength >= 0)
-                    ((HttpWebRequest)m_request).AllowWriteStreamBuffering = false;
+                    request.ContentLength = contentlength;
+                if (request.ContentLength >= 0)
+                    request.AllowWriteStreamBuffering = false;
             }
 
             if (m_state == RequestStates.GetRequest)
@@ -182,17 +182,17 @@ namespace Duplicati.Library.Utility
         }
             
         /// <summary>
-        /// Wrapper class for getting request and respone objects in a async manner
+        /// Wrapper class for getting request and response objects in a async manner
         /// </summary>
         private class AsyncWrapper
         {
-            private IAsyncResult m_async = null;
+            private readonly IAsyncResult m_async = null;
             private Stream m_stream = null;
             private WebResponse m_response = null;
-            private AsyncHttpRequest m_owner;
+            private readonly AsyncHttpRequest m_owner;
             private Exception m_exception = null;
-            private ManualResetEvent m_event = new ManualResetEvent(false);
-            private bool m_isRequest;
+            private readonly ManualResetEvent m_event = new ManualResetEvent(false);
+            private readonly bool m_isRequest;
             private bool m_timedout = false;
 
             public AsyncWrapper(AsyncHttpRequest owner, bool isRequest)
@@ -221,24 +221,24 @@ namespace Duplicati.Library.Utility
                 catch (Exception ex)
                 {
                     if (m_timedout)
-                        m_exception = new WebException(string.Format("{0} timed out", m_isRequest ? "GetRequestStream" : "GetResponse"), ex, WebExceptionStatus.Timeout, ex is WebException ? ((WebException)ex).Response : null);
+                        m_exception = new WebException(string.Format("{0} timed out", m_isRequest ? "GetRequestStream" : "GetResponse"), ex, WebExceptionStatus.Timeout, ex is WebException exception ? exception.Response : null);
                     else
                     {
                         // Workaround for: https://bugzilla.xamarin.com/show_bug.cgi?id=28287
                         var wex = ex;
-                        if (ex is WebException && ((WebException)ex).Response == null)
+                        if (ex is WebException exception && exception.Response == null)
                         {
                             WebResponse resp = null;
 
-                            try { resp = (WebResponse)r.GetType().GetProperty("Response", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(r); }
+                            try { resp = r.GetType().GetProperty("Response", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?.GetValue(r) as WebResponse; }
                             catch {}
 
                             if (resp == null)
-                                try { resp = (WebResponse)m_owner.m_request.GetType().GetField("webResponse", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic).GetValue(m_owner.m_request); }
+                                try { resp = m_owner.m_request.GetType().GetField("webResponse", System.Reflection.BindingFlags.Instance | System.Reflection.BindingFlags.NonPublic)?.GetValue(m_owner.m_request) as WebResponse; }
                                 catch { }
 
                             if (resp != null)
-                                wex = new WebException(ex.Message, ex.InnerException, ((WebException)ex).Status, resp);
+                                wex = new WebException(exception.Message, exception.InnerException, exception.Status, resp);
                         }
 
                         m_exception = wex;

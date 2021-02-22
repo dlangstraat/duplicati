@@ -1,4 +1,5 @@
 ﻿#region Disclaimer / License
+
 // Copyright (C) 2015, The Duplicati Team
 // http://www.duplicati.com, info@duplicati.com
 // 
@@ -16,39 +17,44 @@
 // License along with this library; if not, write to the Free Software
 // Foundation, Inc., 51 Franklin Street, Fifth Floor, Boston, MA  02110-1301  USA
 // 
+
 #endregion
-using System;
-using System.Collections.Generic;
-using System.Linq;
-using System.Text;
+
+using Duplicati.Library.Common.IO;
 using Duplicati.Library.Interface;
 using Renci.SshNet;
 using Renci.SshNet.Common;
+using System;
+using System.Collections.Generic;
+using System.Globalization;
+using System.Linq;
+using System.Threading;
+using System.Threading.Tasks;
 
 namespace Duplicati.Library.Backend
 {
-    public class SSHv2 : IStreamingBackend, IRenameEnabledBackend, IBackend, IDisposable
+    public class SSHv2 : IStreamingBackend, IRenameEnabledBackend
     {
-        public const string SSH_KEYFILE_OPTION = "ssh-keyfile";
-        public const string SSH_KEYFILE_INLINE = "ssh-key";
-        public const string SSH_FINGERPRINT_OPTION = "ssh-fingerprint";
-        public const string SSH_FINGERPRINT_ACCEPT_ANY_OPTION = "ssh-accept-any-fingerprints";
+        private const string SSH_KEYFILE_OPTION = "ssh-keyfile";
+        private const string SSH_KEYFILE_INLINE = "ssh-key";
+        private const string SSH_FINGERPRINT_OPTION = "ssh-fingerprint";
+        private const string SSH_FINGERPRINT_ACCEPT_ANY_OPTION = "ssh-accept-any-fingerprints";
         public const string KEYFILE_URI = "sshkey://";
-        public const string SSH_TIMEOUT_OPTION = "ssh-operation-timeout";
-        public const string SSH_KEEPALIVE_OPTION = "ssh-keepalive";
+        private const string SSH_TIMEOUT_OPTION = "ssh-operation-timeout";
+        private const string SSH_KEEPALIVE_OPTION = "ssh-keepalive";
 
-        Dictionary<string, string> m_options;
+        readonly Dictionary<string, string> m_options;
 
-        private string m_server;
-        private string m_path;
-        private string m_username;
-        private string m_password;
-        private string m_fingerprint;
-        private bool m_fingerprintallowall;
-        private TimeSpan m_operationtimeout;
-        private TimeSpan m_keepaliveinterval;
+        private readonly string m_server;
+        private readonly string m_path;
+        private readonly string m_username;
+        private readonly string m_password;
+        private readonly string m_fingerprint;
+        private readonly bool m_fingerprintallowall;
+        private readonly TimeSpan m_operationtimeout;
+        private readonly TimeSpan m_keepaliveinterval;
 
-        private int m_port = 22;
+        private readonly int m_port = 22;
 
         private SftpClient m_con;
 
@@ -78,8 +84,10 @@ namespace Duplicati.Library.Backend
 
             m_path = uri.Path;
 
-            if (!string.IsNullOrWhiteSpace(m_path) && !m_path.EndsWith("/", StringComparison.Ordinal))
-                m_path += "/";
+            if (!string.IsNullOrWhiteSpace(m_path))
+            {
+                m_path = Util.AppendDirSeparator(m_path, "/");
+            }
 
             if (!m_path.StartsWith("/", StringComparison.Ordinal))
                 m_path = "/" + m_path;
@@ -99,7 +107,6 @@ namespace Duplicati.Library.Backend
 
             if (!string.IsNullOrWhiteSpace(timeoutstr))
                 m_keepaliveinterval = Library.Utility.Timeparser.ParseTimeSpan(timeoutstr);
-
         }
 
         #region IBackend Members
@@ -112,32 +119,42 @@ namespace Duplicati.Library.Backend
         public void CreateFolder()
         {
             CreateConnection();
-            //Bugfix, some SSH servers do not like a trailing slash
-            string p = m_path;
-            if (p.EndsWith("/", StringComparison.Ordinal))
-                p.Substring(0, p.Length - 1);
-            m_con.CreateDirectory(p);
+
+            // Since the SftpClient.CreateDirectory method does not create all the parent directories
+            // as needed, this has to be done manually.
+            string partialPath = String.Empty;
+            foreach (string part in m_path.Split('/').Where(x => !String.IsNullOrEmpty(x)))
+            {
+                partialPath += $"/{part}";
+                if (this.m_con.Exists(partialPath))
+                {
+                    if (!this.m_con.GetAttributes(partialPath).IsDirectory)
+                    {
+                        throw new ArgumentException($"The path {partialPath} already exists and is not a directory.");
+                    }
+                }
+                else
+                {
+                    this.m_con.CreateDirectory(partialPath);
+                }
+            }
         }
 
-        public string DisplayName
-        {
-            get { return Strings.SSHv2Backend.DisplayName; }
-        }
+        public string DisplayName => Strings.SSHv2Backend.DisplayName;
 
-        public string ProtocolKey
-        {
-            get { return "ssh"; }
-        }
+        public string ProtocolKey => "ssh";
 
-        public void Put(string remotename, string filename)
+        public Task PutAsync(string remotename, string filename, CancellationToken cancelToken)
         {
-            using (System.IO.FileStream fs = System.IO.File.Open(filename, System.IO.FileMode.Open, System.IO.FileAccess.Read, System.IO.FileShare.Read))
-                Put(remotename, fs);
+            using (System.IO.FileStream fs = System.IO.File.Open(filename, System.IO.FileMode.Open,
+                System.IO.FileAccess.Read, System.IO.FileShare.Read))
+                return PutAsync(remotename, fs, cancelToken);
         }
 
         public void Get(string remotename, string filename)
         {
-            using (System.IO.FileStream fs = System.IO.File.Open(filename, System.IO.FileMode.Create, System.IO.FileAccess.Write, System.IO.FileShare.None))
+            using (System.IO.FileStream fs = System.IO.File.Open(filename, System.IO.FileMode.Create,
+                System.IO.FileAccess.Write, System.IO.FileShare.None))
                 Get(remotename, fs);
         }
 
@@ -153,31 +170,43 @@ namespace Duplicati.Library.Backend
             {
                 throw new FileMissingException(ex);
             }
-
         }
 
         public IList<ICommandLineArgument> SupportedCommands
         {
             get
             {
-                return new List<ICommandLineArgument>(new ICommandLineArgument[] {
-                    new CommandLineArgument("auth-password", CommandLineArgument.ArgumentType.Password, Strings.SSHv2Backend.DescriptionAuthPasswordShort, Strings.SSHv2Backend.DescriptionAuthPasswordLong),
-                    new CommandLineArgument("auth-username", CommandLineArgument.ArgumentType.String, Strings.SSHv2Backend.DescriptionAuthUsernameShort, Strings.SSHv2Backend.DescriptionAuthUsernameLong),
-                    new CommandLineArgument(SSH_FINGERPRINT_OPTION, CommandLineArgument.ArgumentType.String, Strings.SSHv2Backend.DescriptionFingerprintShort, Strings.SSHv2Backend.DescriptionFingerprintLong),
-                    new CommandLineArgument(SSH_FINGERPRINT_ACCEPT_ANY_OPTION, CommandLineArgument.ArgumentType.Boolean, Strings.SSHv2Backend.DescriptionAnyFingerprintShort, Strings.SSHv2Backend.DescriptionAnyFingerprintLong),
-                    new CommandLineArgument(SSH_KEYFILE_OPTION, CommandLineArgument.ArgumentType.Path, Strings.SSHv2Backend.DescriptionSshkeyfileShort, Strings.SSHv2Backend.DescriptionSshkeyfileLong),
-                    new CommandLineArgument(SSH_KEYFILE_INLINE, CommandLineArgument.ArgumentType.Password, Strings.SSHv2Backend.DescriptionSshkeyShort, Strings.SSHv2Backend.DescriptionSshkeyLong(KEYFILE_URI)),
-                    new CommandLineArgument(SSH_TIMEOUT_OPTION, CommandLineArgument.ArgumentType.Timespan, Strings.SSHv2Backend.DescriptionSshtimeoutShort, Strings.SSHv2Backend.DescriptionSshtimeoutLong, "0"),
-                    new CommandLineArgument(SSH_KEEPALIVE_OPTION, CommandLineArgument.ArgumentType.Timespan, Strings.SSHv2Backend.DescriptionSshkeepaliveShort, Strings.SSHv2Backend.DescriptionSshkeepaliveLong, "0"),
+                return new List<ICommandLineArgument>(new ICommandLineArgument[]
+                {
+                    new CommandLineArgument("auth-password", CommandLineArgument.ArgumentType.Password,
+                        Strings.SSHv2Backend.DescriptionAuthPasswordShort,
+                        Strings.SSHv2Backend.DescriptionAuthPasswordLong),
+                    new CommandLineArgument("auth-username", CommandLineArgument.ArgumentType.String,
+                        Strings.SSHv2Backend.DescriptionAuthUsernameShort,
+                        Strings.SSHv2Backend.DescriptionAuthUsernameLong),
+                    new CommandLineArgument(SSH_FINGERPRINT_OPTION, CommandLineArgument.ArgumentType.String,
+                        Strings.SSHv2Backend.DescriptionFingerprintShort,
+                        Strings.SSHv2Backend.DescriptionFingerprintLong),
+                    new CommandLineArgument(SSH_FINGERPRINT_ACCEPT_ANY_OPTION, CommandLineArgument.ArgumentType.Boolean,
+                        Strings.SSHv2Backend.DescriptionAnyFingerprintShort,
+                        Strings.SSHv2Backend.DescriptionAnyFingerprintLong),
+                    new CommandLineArgument(SSH_KEYFILE_OPTION, CommandLineArgument.ArgumentType.Path,
+                        Strings.SSHv2Backend.DescriptionSshkeyfileShort,
+                        Strings.SSHv2Backend.DescriptionSshkeyfileLong),
+                    new CommandLineArgument(SSH_KEYFILE_INLINE, CommandLineArgument.ArgumentType.Password,
+                        Strings.SSHv2Backend.DescriptionSshkeyShort,
+                        Strings.SSHv2Backend.DescriptionSshkeyLong(KEYFILE_URI)),
+                    new CommandLineArgument(SSH_TIMEOUT_OPTION, CommandLineArgument.ArgumentType.Timespan,
+                        Strings.SSHv2Backend.DescriptionSshtimeoutShort, Strings.SSHv2Backend.DescriptionSshtimeoutLong,
+                        "0"),
+                    new CommandLineArgument(SSH_KEEPALIVE_OPTION, CommandLineArgument.ArgumentType.Timespan,
+                        Strings.SSHv2Backend.DescriptionSshkeepaliveShort,
+                        Strings.SSHv2Backend.DescriptionSshkeepaliveLong, "0"),
                 });
-
             }
         }
 
-        public string Description
-        {
-            get { return Strings.SSHv2Backend.Description; }
-        }
+        public string Description => Strings.SSHv2Backend.Description;
 
         #endregion
 
@@ -207,11 +236,12 @@ namespace Duplicati.Library.Backend
 
         #region IStreamingBackend Implementation
 
-        public void Put(string remotename, System.IO.Stream stream)
+        public Task PutAsync(string remotename, System.IO.Stream stream, CancellationToken cancelToken)
         {
             CreateConnection();
             ChangeDirectory(m_path);
             m_con.UploadFile(stream, remotename);
+            return Task.FromResult(true);
         }
 
         public void Get(string remotename, System.IO.Stream stream)
@@ -249,17 +279,22 @@ namespace Duplicati.Library.Backend
 
             SftpClient con;
 
-            string keyfile;
-            m_options.TryGetValue(SSH_KEYFILE_OPTION, out keyfile);
-            if (string.IsNullOrWhiteSpace(keyfile))
-                m_options.TryGetValue(SSH_KEYFILE_INLINE, out keyfile);
+            m_options.TryGetValue(SSH_KEYFILE_OPTION, out var keyFile);
+            if (string.IsNullOrWhiteSpace(keyFile))
+            {
+                m_options.TryGetValue(SSH_KEYFILE_INLINE, out keyFile);
+            }
 
-            if (!string.IsNullOrWhiteSpace(keyfile))
-                con = new SftpClient(m_server, m_port, m_username, ValidateKeyFile(keyfile, m_password));
+            if (!string.IsNullOrWhiteSpace(keyFile))
+            {
+                con = new SftpClient(m_server, m_port, m_username, ValidateKeyFile(keyFile, m_password));
+            }
             else
+            {
                 con = new SftpClient(m_server, m_port, m_username, m_password ?? string.Empty);
+            }
 
-            con.HostKeyReceived += delegate (object sender, HostKeyEventArgs e)
+            con.HostKeyReceived += (sender, e) =>
             {
                 e.CanTrust = false;
 
@@ -269,15 +304,23 @@ namespace Duplicati.Library.Backend
                     return;
                 }
 
-                string hostFingerprint = e.HostKeyName + " " + e.KeyLength.ToString() + " " + BitConverter.ToString(e.FingerPrint).Replace('-', ':');
+                var hostFingerprint =
+                    $"{e.HostKeyName} {e.KeyLength.ToString()} {BitConverter.ToString(e.FingerPrint).Replace('-', ':')}";
 
                 if (string.IsNullOrEmpty(m_fingerprint))
-                    throw new Library.Utility.HostKeyException(Strings.SSHv2Backend.FingerprintNotSpecifiedManagedError(hostFingerprint.ToLower(), SSH_FINGERPRINT_OPTION, SSH_FINGERPRINT_ACCEPT_ANY_OPTION), hostFingerprint, m_fingerprint);
+                    throw new Library.Utility.HostKeyException(
+                        Strings.SSHv2Backend.FingerprintNotSpecifiedManagedError(
+                            hostFingerprint.ToLower(CultureInfo.InvariantCulture), SSH_FINGERPRINT_OPTION,
+                            SSH_FINGERPRINT_ACCEPT_ANY_OPTION),
+                        hostFingerprint, m_fingerprint);
 
-                if (hostFingerprint.ToLower() != m_fingerprint.ToLower())
-                    throw new Library.Utility.HostKeyException(Strings.SSHv2Backend.FingerprintNotMatchManagedError(hostFingerprint.ToLower()), hostFingerprint, m_fingerprint);
-                else
-                    e.CanTrust = true;
+                if (!string.Equals(hostFingerprint, m_fingerprint, StringComparison.OrdinalIgnoreCase))
+                    throw new Library.Utility.HostKeyException(
+                        Strings.SSHv2Backend.FingerprintNotMatchManagedError(
+                            hostFingerprint.ToLower(CultureInfo.InvariantCulture)),
+                        hostFingerprint, m_fingerprint);
+
+                e.CanTrust = true;
             };
 
             if (m_operationtimeout.Ticks != 0)
@@ -295,12 +338,8 @@ namespace Duplicati.Library.Backend
             if (string.IsNullOrEmpty(path))
                 return;
 
-            string working_dir = m_con.WorkingDirectory;
-
-            if (!working_dir.EndsWith("/", StringComparison.Ordinal))
-                working_dir += "/";
-
-            if (working_dir == path)
+            var workingDir = Util.AppendDirSeparator(m_con.WorkingDirectory, "/");
+            if (workingDir == path)
                 return;
 
             try
@@ -309,7 +348,8 @@ namespace Duplicati.Library.Backend
             }
             catch (Exception ex)
             {
-                throw new Interface.FolderMissingException(Strings.SSHv2Backend.FolderNotFoundManagedError(path, ex.Message), ex);
+                throw new Interface.FolderMissingException(
+                    Strings.SSHv2Backend.FolderNotFoundManagedError(path, ex.Message), ex);
             }
         }
 
@@ -320,42 +360,42 @@ namespace Duplicati.Library.Backend
             CreateConnection();
             ChangeDirectory(m_path);
 
-            foreach (Renci.SshNet.Sftp.SftpFile ls in m_con.ListDirectory(path))
-                if (ls.Name.ToString() != "." && ls.Name.ToString() != "..")
-                    yield return new FileEntry(ls.Name, ls.Length, ls.LastAccessTime, ls.LastWriteTime) { IsFolder = ls.Attributes.IsDirectory };
+            foreach (var ls in m_con.ListDirectory(path))
+            {
+                if (ls.Name.ToString() == "." || ls.Name.ToString() == "..") continue;
+                yield return new FileEntry(ls.Name, ls.Length,
+                    ls.LastAccessTime, ls.LastWriteTime) {IsFolder = ls.Attributes.IsDirectory};
+            }
         }
 
-        public static Renci.SshNet.PrivateKeyFile ValidateKeyFile(string filename, string password)
+        private static Renci.SshNet.PrivateKeyFile ValidateKeyFile(string filename, string password)
         {
             try
             {
-                if (filename.StartsWith(KEYFILE_URI, StringComparison.OrdinalIgnoreCase))
+                if (!filename.StartsWith(KEYFILE_URI, StringComparison.OrdinalIgnoreCase))
                 {
-                    using (var ms = new System.IO.MemoryStream())
-                    using (var sr = new System.IO.StreamWriter(ms))
-                    {
-                        sr.Write(Duplicati.Library.Utility.Uri.UrlDecode(filename.Substring(KEYFILE_URI.Length)));
-                        sr.Flush();
-
-                        ms.Position = 0;
-
-                        if (String.IsNullOrEmpty(password))
-                            return new Renci.SshNet.PrivateKeyFile(ms);
-                        else
-                            return new Renci.SshNet.PrivateKeyFile(ms, password);
-                    }
+                    return String.IsNullOrEmpty(password)
+                        ? new PrivateKeyFile(filename)
+                        : new PrivateKeyFile(filename, password);
                 }
-                else
+
+                using (var ms = new System.IO.MemoryStream())
+                using (var sr = new System.IO.StreamWriter(ms))
                 {
-                    if (String.IsNullOrEmpty(password))
-                        return new Renci.SshNet.PrivateKeyFile(filename);
-                    else
-                        return new Renci.SshNet.PrivateKeyFile(filename, password);
+                    sr.Write(Utility.Uri.UrlDecode(filename.Substring(KEYFILE_URI.Length)));
+                    sr.Flush();
+
+                    ms.Position = 0;
+
+                    return String.IsNullOrEmpty(password) ? new PrivateKeyFile(ms) : new PrivateKeyFile(ms, password);
                 }
             }
             catch (Exception ex)
             {
-                throw new UserInformationException(string.Format("Failed to parse the keyfile, check the key format and passphrase. Error message was {0}", ex.Message), "SSHFailedToParseKeyFile", ex);
+                throw new UserInformationException(
+                    "Failed to parse the keyfile, check the key format and passphrase. " +
+                    $"Error message was {ex.Message}",
+                    "SSHFailedToParseKeyFile", ex);
             }
         }
 
@@ -363,15 +403,12 @@ namespace Duplicati.Library.Backend
 
         internal SftpClient Client
         {
-            get
-            {
-                return m_con;
-            }
+            get { return m_con; }
         }
 
         public string[] DNSName
         {
-            get { return new string[] { m_server }; }
+            get { return new[] {m_server}; }
         }
     }
 }

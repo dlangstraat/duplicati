@@ -20,7 +20,7 @@ using System.Collections.Generic;
 
 namespace Duplicati.CommandLine.RecoveryTool
 {
-    static class Program
+    public static class Program
     {
         /// <summary>
         /// The main entry point for the application.
@@ -50,7 +50,7 @@ namespace Duplicati.CommandLine.RecoveryTool
                     options["auth_username"] = System.Environment.GetEnvironmentVariable("AUTH_USERNAME");
 
                 if (options.ContainsKey("tempdir") && !string.IsNullOrEmpty(options["tempdir"]))
-                    Library.Utility.TempFolder.SetSystemTempPath(options["tempdir"]);
+                    Library.Utility.TempFolder.SystemTempPath = options["tempdir"];
 
                 bool isHelp = args.Count == 0 || (args.Count >= 1 && string.Equals(args[0], "help", StringComparison.OrdinalIgnoreCase));
                 if (!isHelp && ((options.ContainsKey("parameters-file") && !string.IsNullOrEmpty("parameters-file")) || (options.ContainsKey("parameter-file") && !string.IsNullOrEmpty("parameter-file")) || (options.ContainsKey("parameterfile") && !string.IsNullOrEmpty("parameterfile"))))
@@ -79,10 +79,18 @@ namespace Duplicati.CommandLine.RecoveryTool
                 var actions = new Dictionary<string, CommandRunner>(StringComparer.OrdinalIgnoreCase);
                 actions["download"] = Download.Run;
                 actions["recompress"] = Recompress.Run;
-                actions["index"] = Index.Run;
                 actions["list"] = List.Run;
                 actions["restore"] = Restore.Run;
                 actions["help"] = Help.Run;
+
+                if (Library.Utility.Utility.ParseBoolOption(options, "build-index-with-files"))
+                {
+                    actions["index"] = FileIndex.Run;
+                }
+                else
+                {
+                    actions["index"] = Index.Run;
+                }
 
                 CommandRunner command;
 
@@ -106,7 +114,7 @@ namespace Duplicati.CommandLine.RecoveryTool
         {
             try
             {
-                List<string> fargs = new List<string>(Library.Utility.Utility.ReadFileWithDefaultEncoding(Library.Utility.Utility.ExpandEnvironmentVariables(filename)).Replace("\r\n", "\n").Replace("\r", "\n").Split(new String[] { "\n" }, StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()));
+                List<string> fargs = new List<string>(Library.Utility.Utility.ReadFileWithDefaultEncoding(Environment.ExpandEnvironmentVariables(filename)).Replace("\r\n", "\n").Replace("\r", "\n").Split(new String[] { "\n" }, StringSplitOptions.RemoveEmptyEntries).Select(x => x.Trim()));
                 var tmpparsed = Library.Utility.FilterCollector.ExtractOptions(fargs);
 
                 var opt = tmpparsed.Item1;
